@@ -17,6 +17,9 @@ import {
   FileCheck,
 } from 'lucide-react';
 import { useToast } from '@/shared/hooks/use-toast';
+import { useAuth } from '@/domains/auth/hooks/useAuth';
+import { useProfile } from '@/domains/auth/hooks/useProfile';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
 import { CeoRepository } from '@/domains/ceo/services/CeoRepository';
 import { CommercialExperiment, GrowthOpportunity, ExperimentDecision } from '@/domains/ceo/types';
 import { CeoExecutiveKpis, CeoFinancialMetricsService } from '@/domains/ceo/services/CeoFinancialMetricsService';
@@ -38,6 +41,18 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
   onExperimentUpdated,
 }) => {
   const { toast } = useToast();
+  const { user } = useAuth();
+  const { profile } = useProfile();
+  const { activeWorkspaceRole, activeWorkspace } = useWorkspace();
+
+  // Prerrogativa executiva: proprietário/admin do workspace ou perfil owner
+  const isOwnerOrExecutive =
+    profile?.role === 'owner' ||
+    profile?.role === 'admin' ||
+    activeWorkspaceRole === 'owner' ||
+    activeWorkspaceRole === 'admin' ||
+    Boolean(user?.id && activeWorkspace?.owner_id && user.id === activeWorkspace.owner_id);
+
   const [activeSubTab, setActiveSubTab] = useState<'oportunidades' | 'experimentos' | 'em_execucao' | 'concluidas'>('oportunidades');
   const [opportunities, setOpportunities] = useState<GrowthOpportunity[]>([]);
   const [selectedOpp, setSelectedOpp] = useState<GrowthOpportunity | null>(null);
@@ -139,15 +154,25 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
 
   // Transição 2: Aprovar experimento planejado (Status: 'planejado' -> 'aprovado')
   const handleApproveExperiment = async (exp: CommercialExperiment) => {
+    if (!isOwnerOrExecutive) {
+      toast({
+        title: 'Ação Restrita',
+        description: 'A aprovação formal de experimentos comerciais é prerrogativa exclusiva do proprietário/administrador.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const res = await CeoRepository.updateExperimentStatus(exp.id, 'aprovado', {
       decision: 'aprovado',
-      rationale: 'Experimento comercial aprovado formalmente pela gestão/proprietário.',
+      rationale: 'Experimento comercial aprovado formalmente pela gestão executiva.',
+      currentStatus: exp.status,
     });
 
     if (res.success) {
       toast({
         title: 'Experimento Aprovado!',
-        description: `O experimento "${exp.title || exp.name}" agora está aprovado para execução.`,
+        description: `O experimento "${exp.title || exp.name}" foi aprovado pelo proprietário e está pronto para execução.`,
       });
       if (onExperimentUpdated) onExperimentUpdated();
       else if (onExperimentCreated) onExperimentCreated();
@@ -160,9 +185,28 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
     }
   };
 
-  // Transição 3: Iniciar execução (Status: 'aprovado' ou 'planejado' -> 'em_andamento')
+  // Transição 3: Iniciar execução (Status estrito: 'aprovado' -> 'em_andamento')
   const handleConfirmStart = async () => {
     if (!startModalExp) return;
+
+    if (!isOwnerOrExecutive) {
+      toast({
+        title: 'Ação Restrita',
+        description: 'Apenas proprietários e administradores podem iniciar a execução de experimentos.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
+    const isApproved = startModalExp.status === 'aprovado' || startModalExp.status === 'approved';
+    if (!isApproved) {
+      toast({
+        title: 'Aprovação Prévia Obrigatória',
+        description: 'O experimento precisa ser formalmente aprovado antes de ser colocado em execução.',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     const todayIso = new Date().toISOString().slice(0, 10);
     const baseline = startBaselineInput.trim() ? startBaselineInput.trim() : null;
@@ -172,6 +216,7 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
       start_date: todayIso,
       baseline_value: baseline,
       current_value: 'Em medição inicial',
+      currentStatus: startModalExp.status,
     });
 
     if (res.success) {
@@ -197,6 +242,15 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
   const handleConfirmConclude = async () => {
     if (!concludeModalExp) return;
 
+    if (!isOwnerOrExecutive) {
+      toast({
+        title: 'Ação Restrita',
+        description: 'Apenas o proprietário ou administrador executivo pode concluir experimentos.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const todayIso = new Date().toISOString().slice(0, 10);
     const parsedImpact = concludeImpact.trim() ? parseFloat(concludeImpact.replace(',', '.')) : undefined;
 
@@ -204,9 +258,10 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
       status: 'concluido',
       end_date: todayIso,
       decision: concludeDecision,
-      decision_rationale: concludeRationale.trim() || 'Conclusão registrada pela gestão.',
+      decision_rationale: concludeRationale.trim() || 'Conclusão registrada pela gestão executiva.',
       current_value: concludeFinalValue.trim() || undefined,
       measured_financial_impact: Number.isFinite(parsedImpact) ? parsedImpact : 0,
+      currentStatus: concludeModalExp.status,
     });
 
     if (res.success) {
@@ -232,12 +287,22 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
 
   // Transição 5: Cancelar experimento
   const handleCancelExperiment = async (exp: CommercialExperiment) => {
+    if (!isOwnerOrExecutive) {
+      toast({
+        title: 'Ação Restrita',
+        description: 'Apenas o proprietário ou administrador pode cancelar experimentos.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const todayIso = new Date().toISOString().slice(0, 10);
     const res = await CeoRepository.updateExperiment(exp.id, {
       status: 'cancelado',
       end_date: todayIso,
       decision: 'interromper',
       decision_rationale: 'Experimento interrompido preventivamente pela gestão.',
+      currentStatus: exp.status,
     });
 
     if (res.success) {
@@ -461,33 +526,40 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 w-full sm:w-auto justify-end">
-                      {!isApproved && (
+                      {!isApproved ? (
                         <Button
                           size="sm"
                           variant="outline"
                           onClick={() => handleApproveExperiment(exp)}
-                          className="h-8 text-xs border-blue-500/40 text-blue-400 hover:bg-blue-950/30 font-semibold gap-1"
+                          disabled={!isOwnerOrExecutive}
+                          title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode aprovar experimentos' : 'Aprovar experimento formalmente'}
+                          className="h-8 text-xs border-blue-500/40 text-blue-400 hover:bg-blue-950/30 font-semibold gap-1 disabled:opacity-50"
                         >
                           <FileCheck className="w-3.5 h-3.5" />
                           Aprovar
                         </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          onClick={() => {
+                            setStartModalExp(exp);
+                            setStartBaselineInput(String(exp.baseline_value || ''));
+                          }}
+                          disabled={!isOwnerOrExecutive}
+                          title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode iniciar a execução' : 'Iniciar execução'}
+                          className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1 disabled:opacity-50"
+                        >
+                          <Play className="w-3.5 h-3.5" />
+                          Iniciar Execução
+                        </Button>
                       )}
-                      <Button
-                        size="sm"
-                        onClick={() => {
-                          setStartModalExp(exp);
-                          setStartBaselineInput(String(exp.baseline_value || ''));
-                        }}
-                        className="h-8 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-bold gap-1"
-                      >
-                        <Play className="w-3.5 h-3.5" />
-                        Iniciar Execução
-                      </Button>
                       <Button
                         size="sm"
                         variant="ghost"
                         onClick={() => handleCancelExperiment(exp)}
-                        className="h-8 text-xs text-red-400 hover:bg-red-950/20"
+                        disabled={!isOwnerOrExecutive}
+                        title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode cancelar experimentos' : 'Cancelar experimento'}
+                        className="h-8 text-xs text-red-400 hover:bg-red-950/20 disabled:opacity-50"
                       >
                         Cancelar
                       </Button>
@@ -536,7 +608,9 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
                         setConcludeImpact(exp.measured_financial_impact ? String(exp.measured_financial_impact) : '');
                         setConcludeDecision('manter');
                       }}
-                      className="h-8 text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold gap-1"
+                      disabled={!isOwnerOrExecutive}
+                      title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode concluir experimentos' : 'Concluir e avaliar experimento'}
+                      className="h-8 text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold gap-1 disabled:opacity-50"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       Concluir / Avaliar
@@ -545,7 +619,9 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
                       size="sm"
                       variant="ghost"
                       onClick={() => handleCancelExperiment(exp)}
-                      className="h-8 text-xs text-red-400 hover:bg-red-950/20"
+                      disabled={!isOwnerOrExecutive}
+                      title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode interromper experimentos' : 'Interromper experimento'}
+                      className="h-8 text-xs text-red-400 hover:bg-red-950/20 disabled:opacity-50"
                     >
                       Interromper
                     </Button>
