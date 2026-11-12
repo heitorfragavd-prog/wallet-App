@@ -124,15 +124,15 @@ export interface UpsertParticipantInput {
 
 export function useCentralConversas() {
   const { user } = useAuth();
-  const { activeWorkspaceId, activeWorkspace } = useWorkspace();
+  const { activeWorkspace, activeWorkspaceRole } = useWorkspace();
   const { toast } = useToast();
 
-  const workspaceId = activeWorkspaceId ?? null;
+  const workspaceId = activeWorkspace?.id ?? null;
   const isOwner = Boolean(
     user?.id && activeWorkspace?.user_id && user.id === activeWorkspace.user_id,
   );
   const isWorkspaceAdmin = Boolean(
-    isOwner || activeWorkspace?.activeWorkspaceRole === "admin",
+    isOwner || activeWorkspaceRole === "admin",
   );
   const isExecutiveUser = Boolean(isOwner || isWorkspaceAdmin);
 
