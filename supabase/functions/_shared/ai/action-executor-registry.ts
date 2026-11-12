@@ -274,6 +274,49 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
   });
 }
 
+export function registerFechamentoActionHandlers(registry: ActionExecutorRegistry): void {
+  registry.register("confirmar_fechamento_caixa", async (payload, context, client) => {
+    const fechamentoId = String(payload.fechamento_id || "").trim();
+    if (!fechamentoId) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "fechamento_id obrigatório para confirmar fechamento de caixa.",
+      );
+    }
+
+    const nowIso = new Date().toISOString();
+    const updates: Record<string, unknown> = {
+      status: "conferido",
+      conferido_por: context.userId,
+      conferido_em: nowIso,
+      updated_at: nowIso,
+    };
+
+    if (typeof payload.observacao === "string" && payload.observacao.trim()) {
+      updates.observacao = payload.observacao.trim();
+    }
+
+    const { data, error } = await client
+      .from("fechamentos_caixa")
+      .update(updates)
+      .eq("id", fechamentoId)
+      .eq("workspace_id", context.workspaceId)
+      .select("id, status, data_fechamento, sobra")
+      .single();
+
+    if (error || !data) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_EXECUTION_ERROR",
+        500,
+        `Erro ao confirmar fechamento de caixa: ${error?.message ?? "Registro não encontrado no workspace"}`,
+      );
+    }
+
+    return { recordId: data.id, data };
+  });
+}
+
 /**
  * Cria o ActionExecutorRegistry padrão canônico.
  * 
@@ -294,6 +337,8 @@ export function createDefaultActionExecutorRegistry(options?: {
   if (!options?.disableBoletoExecutor) {
     registerBoletoActionHandlers(registry);
   }
+
+  registerFechamentoActionHandlers(registry);
 
   return registry;
 }

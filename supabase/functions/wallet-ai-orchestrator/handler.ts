@@ -61,6 +61,19 @@ import {
   fetchAndExecuteCoordinatedCeoSnapshot,
   type CoordinatedCeoSnapshot,
 } from "../_shared/ai/specialist-router.ts";
+import {
+  STANDARD_GROUP_TEMPLATES,
+  type OperationalGroupType,
+  normalizeOperationalGroupType,
+  normalizeGroupPermissions,
+  filterCatalogForGroup,
+  buildGroupSystemPrompt,
+  processFechamentoGrupoTurn,
+} from "../_shared/ai/group-governance.ts";
+import {
+  SupabaseActionDatabaseMutator,
+  createDefaultActionExecutorRegistry,
+} from "../_shared/ai/action-executor-registry.ts";
 
 export interface AuditEventLogger {
   logEvent(event: {
@@ -106,6 +119,9 @@ export interface OrchestratorHandlerDependencies {
   ) => Promise<void>;
   /** Factory para o cliente ao vivo do Eyemobile. Opcional — se ausente, usa cache sincronizado. */
   eyemobileLiveClientFactory?: (context: AiExecutionContext) => EyemobileLiveClient;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  adminSupabase?: any;
+  telegramBotToken?: string;
   telemetryLogger?: {
     logTelemetry(telemetry: {
       workspaceId: string;
@@ -357,6 +373,37 @@ export async function handleOrchestratorHttpRequest(
         );
       }
 
+      // Execução segura para ações executáveis registradas (ex: confirmar_fechamento_caixa / cadastrar_divida_boleto)
+      let executionOutcome: { executed: boolean; recordId?: string } = { executed: false };
+      if (dependencies.adminSupabase) {
+        const registry = createDefaultActionExecutorRegistry();
+        if (registry.has(confirmResult.proposal.actionType)) {
+          const mutator = new SupabaseActionDatabaseMutator(dependencies.adminSupabase, registry);
+          const execRes = await mutator.executeMutation(
+            confirmResult.proposal.actionType,
+            confirmResult.proposal.payload || {},
+            context,
+          );
+          if (execRes.success) {
+            await dependencies.proposalRepo.executeProposalAtomically(confirmResult.proposal.id);
+            executionOutcome = { executed: true, recordId: execRes.recordId };
+          }
+        }
+      }
+
+      // Libera status de processamento da conversa vinculada
+      if (confirmResult.proposal.conversationId && dependencies.adminSupabase) {
+        try {
+          await dependencies.adminSupabase
+            .from("wallet_ai_conversations")
+            .update({ processing_status: "idle", updated_at: new Date().toISOString() })
+            .eq("id", confirmResult.proposal.conversationId)
+            .eq("workspace_id", context.workspaceId);
+        } catch {
+          // Defensivo
+        }
+      }
+
       if (dependencies.auditLogger) {
         await dependencies.auditLogger.logEvent({
           userId: context.userId,
@@ -371,6 +418,8 @@ export async function handleOrchestratorHttpRequest(
             risk_level: confirmResult.proposal.riskLevel,
             confirmed_by: context.userId,
             user_role: userRole,
+            executed: executionOutcome.executed,
+            record_id: executionOutcome.recordId ?? null,
           },
         });
       }
@@ -378,7 +427,9 @@ export async function handleOrchestratorHttpRequest(
       return new Response(
         JSON.stringify({
           success: true,
-          status: "confirmed",
+          status: executionOutcome.executed ? "executed" : "confirmed",
+          executed: executionOutcome.executed,
+          record_id: executionOutcome.recordId,
           proposal: confirmResult.proposal,
           correlation_id: correlationId,
         }),
@@ -574,6 +625,356 @@ export async function handleOrchestratorHttpRequest(
       });
     }
 
+    // ─── URL ASSINADA AUTORIZADA PARA ANEXOS DE GRUPO / CONVERSAS ───
+    if (body.action === "get_attachment_url") {
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+      const storagePath = typeof body.storage_path === "string" ? body.storage_path.trim() : "";
+      if (!storagePath || !dependencies.adminSupabase) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_storage_path_or_client",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      let authorized = storagePath.startsWith(`${context.userId}/${context.workspaceId}/`);
+      if (!authorized && storagePath.startsWith(`groups/${context.workspaceId}/`)) {
+        const parts = storagePath.split("/");
+        const pathGrupoId = parts[2] || "";
+        if (pathGrupoId) {
+          const { data: canAccess } = await dependencies.adminSupabase.rpc("user_can_access_group", {
+            p_grupo_id: pathGrupoId,
+            p_user_id: context.userId,
+          });
+          authorized = Boolean(canAccess);
+        }
+      }
+
+      if (!authorized) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_attachment_access",
+            code: "WALLET_AI_FORBIDDEN",
+            message: "Você não tem permissão para acessar este anexo.",
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
+
+      const { data: signed, error: signErr } = await dependencies.adminSupabase.storage
+        .from("chat-attachments")
+        .createSignedUrl(storagePath, 3600);
+
+      if (signErr || !signed?.signedUrl) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: signErr?.message || "signed_url_failed",
+            code: "WALLET_AI_TOOL_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          signed_url: signed.signedUrl,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
+      );
+    }
+
+    // ─── PROVISIONAMENTO IDEMPOTENTE DOS 4 GRUPOS OPERACIONAIS PADRÃO ───
+    if (body.action === "provision_default_groups") {
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        undefined,
+        correlationId,
+      );
+      if (!dependencies.adminSupabase) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "admin_client_unavailable",
+            code: "WALLET_AI_TOOL_ERROR",
+            correlation_id: correlationId,
+          }),
+          { status: 500, headers: responseHeaders },
+        );
+      }
+
+      const { data: isExec } = await dependencies.adminSupabase.rpc("is_workspace_executive", {
+        p_workspace_id: context.workspaceId,
+        p_user_id: context.userId,
+      });
+
+      if (!isExec) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_group_provision",
+            code: "WALLET_AI_FORBIDDEN",
+            message: "Apenas proprietário e administradores podem provisionar grupos operacionais.",
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
+
+      const { data: existingGroups } = await dependencies.adminSupabase
+        .from("telegram_grupos_config")
+        .select("id, tipo_grupo, nome_grupo")
+        .eq("workspace_id", context.workspaceId);
+
+      const existingTypes = new Set(
+        (existingGroups || []).map((g: { tipo_grupo?: string }) => g.tipo_grupo),
+      );
+      const { data: wsInfo } = await dependencies.adminSupabase
+        .from("workspaces")
+        .select("user_id")
+        .eq("id", context.workspaceId)
+        .maybeSingle();
+
+      const ownerUserId = (wsInfo as { user_id?: string } | null)?.user_id || context.userId;
+      let createdCount = 0;
+
+      for (const tipo of ["fechamento", "nfe_boletos", "contas_empresa", "conversas_loja"] as OperationalGroupType[]) {
+        if (existingTypes.has(tipo)) continue;
+        const tpl = STANDARD_GROUP_TEMPLATES[tipo];
+        const { data: newGroup, error: insErr } = await dependencies.adminSupabase
+          .from("telegram_grupos_config")
+          .insert({
+            workspace_id: context.workspaceId,
+            nome_grupo: tpl.nome_grupo,
+            descricao: tpl.descricao,
+            tipo_grupo: tpl.tipo_grupo,
+            ferramentas_permitidas: tpl.ferramentas_permitidas,
+            dados_permitidos: tpl.dados_permitidos,
+            acoes_permitidas: tpl.acoes_permitidas,
+            funcionalidades_autorizadas: tpl.funcionalidades_autorizadas,
+            ativo: true,
+            chat_id: null,
+            created_by: context.userId,
+          })
+          .select("id, nome_grupo")
+          .single();
+
+        if (!insErr && newGroup?.id) {
+          createdCount += 1;
+          await dependencies.adminSupabase.from("grupo_participantes").upsert(
+            {
+              grupo_id: newGroup.id,
+              workspace_id: context.workspaceId,
+              user_id: ownerUserId,
+              role_no_grupo: "admin_grupo",
+              permissoes: {
+                ler: true,
+                enviar_mensagens: true,
+                enviar_documentos: true,
+                confirmar_operacoes: true,
+                gerenciar_grupo: true,
+              },
+              ativo: true,
+              autorizado_por: context.userId,
+            },
+            { onConflict: "grupo_id,user_id" },
+          );
+          if (ownerUserId !== context.userId) {
+            await dependencies.adminSupabase.from("grupo_participantes").upsert(
+              {
+                grupo_id: newGroup.id,
+                workspace_id: context.workspaceId,
+                user_id: context.userId,
+                role_no_grupo: "admin_grupo",
+                permissoes: {
+                  ler: true,
+                  enviar_mensagens: true,
+                  enviar_documentos: true,
+                  confirmar_operacoes: true,
+                  gerenciar_grupo: true,
+                },
+                ativo: true,
+                autorizado_por: context.userId,
+              },
+              { onConflict: "grupo_id,user_id" },
+            );
+          }
+          await dependencies.adminSupabase.from("wallet_ai_conversations").insert({
+            workspace_id: context.workspaceId,
+            user_id: ownerUserId,
+            grupo_id: newGroup.id,
+            title: newGroup.nome_grupo || tpl.nome_grupo,
+            agent_type: "operational",
+            is_shared: true,
+            is_group: true,
+            channel: "web",
+            last_channel: "web",
+            processing_status: "idle",
+          });
+        }
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          created_count: createdCount,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
+      );
+    }
+
+    // ─── ENVIO DIRETO DE MENSAGEM HUMANA EM GRUPO (+ ESPELHO TELEGRAM) ───
+    if (body.action === "send_group_message") {
+      context = await authorizeAiRequest(
+        request,
+        workspaceId,
+        dependencies.authDeps,
+        conversationId,
+        correlationId,
+      );
+      if (!conversationId || !dependencies.adminSupabase || !dependencies.conversationRepo) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "missing_conversation_or_repo",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      const { data: convMeta } = await dependencies.adminSupabase
+        .from("wallet_ai_conversations")
+        .select("id, workspace_id, is_group, grupo_id, external_chat_id")
+        .eq("id", conversationId)
+        .eq("workspace_id", context.workspaceId)
+        .maybeSingle();
+
+      if (!convMeta?.is_group || !convMeta.grupo_id) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "not_a_group_conversation",
+            code: "WALLET_AI_INVALID_CONVERSATION",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      const { data: canWrite } = await dependencies.adminSupabase.rpc("user_can_write_group_message", {
+        p_grupo_id: convMeta.grupo_id,
+        p_user_id: context.userId,
+      });
+
+      if (!canWrite) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "forbidden_group_write",
+            code: "WALLET_AI_FORBIDDEN",
+            message: "Você não tem permissão para enviar mensagens neste grupo.",
+            correlation_id: correlationId,
+          }),
+          { status: 403, headers: responseHeaders },
+        );
+      }
+
+      const textBody = typeof body.text === "string" ? body.text.trim() : "";
+      const senderName = typeof body.sender_name === "string" ? body.sender_name.trim() : undefined;
+      const senderRole = typeof body.sender_role === "string" ? body.sender_role.trim() : context.role;
+      const attachmentPath = typeof body.attachment_path === "string" ? body.attachment_path.trim() : undefined;
+      const attachmentUrl = typeof body.attachment_url === "string" ? body.attachment_url.trim() : undefined;
+      const attachmentMime = typeof body.attachment_mime === "string" ? body.attachment_mime.trim() : undefined;
+      const attachmentName = typeof body.attachment_name === "string" ? body.attachment_name.trim() : undefined;
+
+      if (!textBody && !attachmentPath) {
+        return new Response(
+          JSON.stringify({
+            success: false,
+            error: "empty_group_message",
+            code: "WALLET_AI_INVALID_PAYLOAD",
+            correlation_id: correlationId,
+          }),
+          { status: 400, headers: responseHeaders },
+        );
+      }
+
+      const inserted = await dependencies.conversationRepo.appendMessage({
+        conversationId,
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        role: "user",
+        content: textBody || (attachmentName ? `📎 ${attachmentName}` : null),
+        channel: "web",
+        senderName,
+        senderRole,
+        attachmentPath,
+        attachmentUrl,
+        attachmentMime,
+        attachmentName,
+      });
+
+      if (attachmentPath) {
+        await dependencies.adminSupabase.from("wallet_ai_message_attachments").insert({
+          message_id: inserted.id,
+          conversation_id: conversationId,
+          workspace_id: context.workspaceId,
+          grupo_id: convMeta.grupo_id,
+          uploaded_by: context.userId,
+          bucket: "chat-attachments",
+          storage_path: attachmentPath,
+          file_name: attachmentName || "anexo",
+          mime_type: attachmentMime || "application/octet-stream",
+          source_channel: "web",
+        });
+      }
+
+      if (body.mirror_to_telegram === true && convMeta.external_chat_id && dependencies.telegramBotToken && textBody) {
+        try {
+          const authorPrefix = senderName ? `${senderName}: ` : "";
+          await fetch(`https://api.telegram.org/bot${dependencies.telegramBotToken}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: convMeta.external_chat_id,
+              text: `${authorPrefix}${textBody}`.slice(0, 4000),
+            }),
+          });
+        } catch (tgErr) {
+          console.warn("[handler] Falha ao espelhar mensagem humana para Telegram:", tgErr);
+        }
+      }
+
+      return new Response(
+        JSON.stringify({
+          success: true,
+          message: inserted,
+          correlation_id: correlationId,
+        }),
+        { status: 200, headers: responseHeaders },
+      );
+    }
+
     if (messages.length === 0) {
       return new Response(
         JSON.stringify({
@@ -737,8 +1138,101 @@ export async function handleOrchestratorHttpRequest(
       }
     }
 
+    // ─── VERIFICAÇÃO DE GRUPO OPERACIONAL E ISOLAMENTO ESTRITO CEO vs GRUPO ───
+    let resolvedGroupContext: {
+      id: string;
+      nomeGrupo: string;
+      tipoGrupo: OperationalGroupType;
+      ferramentasPermitidas: string[];
+      chatId?: string | null;
+      permissoes: ReturnType<typeof normalizeGroupPermissions>;
+    } | null = null;
+
+    if (conversationId && dependencies.adminSupabase) {
+      const { data: convMeta } = await dependencies.adminSupabase
+        .from("wallet_ai_conversations")
+        .select("id, workspace_id, agent_type, is_group, is_shared, grupo_id, external_chat_id")
+        .eq("id", conversationId)
+        .eq("workspace_id", context.workspaceId)
+        .maybeSingle();
+
+      if (convMeta?.is_group && convMeta.grupo_id) {
+        if (
+          requestedAgentType === "ceo" ||
+          userPromptText.trim().toLowerCase() === "/ceo" ||
+          userPromptText.trim().toLowerCase().startsWith("/ceo ")
+        ) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "forbidden_ceo_in_group",
+              code: "WALLET_AI_FORBIDDEN",
+              message: "O Cérebro Executivo Wallet CEO é estritamente privado e nunca pode ser invocado dentro de um grupo.",
+              correlation_id: correlationId,
+            }),
+            { status: 403, headers: responseHeaders },
+          );
+        }
+
+        const { data: canWrite } = await dependencies.adminSupabase.rpc("user_can_write_group_message", {
+          p_grupo_id: convMeta.grupo_id,
+          p_user_id: context.userId,
+        });
+
+        if (!canWrite) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "forbidden_group_write",
+              code: "WALLET_AI_FORBIDDEN",
+              message: "Você não possui permissão para enviar mensagens ou interagir com a IA neste grupo.",
+              correlation_id: correlationId,
+            }),
+            { status: 403, headers: responseHeaders },
+          );
+        }
+
+        const { data: grpCfg } = await dependencies.adminSupabase
+          .from("telegram_grupos_config")
+          .select("id, nome_grupo, tipo_grupo, ferramentas_permitidas, chat_id, ativo")
+          .eq("id", convMeta.grupo_id)
+          .maybeSingle();
+
+        if (!grpCfg || grpCfg.ativo === false) {
+          return new Response(
+            JSON.stringify({
+              success: false,
+              error: "group_inactive_or_missing",
+              code: "WALLET_AI_FORBIDDEN",
+              message: "Grupo operacional não encontrado ou desativado.",
+              correlation_id: correlationId,
+            }),
+            { status: 403, headers: responseHeaders },
+          );
+        }
+
+        const { data: gpPart } = await dependencies.adminSupabase
+          .from("grupo_participantes")
+          .select("permissoes")
+          .eq("grupo_id", grpCfg.id)
+          .eq("user_id", context.userId)
+          .maybeSingle();
+
+        resolvedGroupContext = {
+          id: grpCfg.id,
+          nomeGrupo: grpCfg.nome_grupo || "Grupo Operacional",
+          tipoGrupo: normalizeOperationalGroupType(grpCfg.tipo_grupo),
+          ferramentasPermitidas: Array.isArray(grpCfg.ferramentas_permitidas)
+            ? grpCfg.ferramentas_permitidas
+            : [],
+          chatId: grpCfg.chat_id ? String(grpCfg.chat_id) : convMeta.external_chat_id || null,
+          permissoes: normalizeGroupPermissions(gpPart?.permissoes || null),
+        };
+      }
+    }
+
     // ─── GATE 1 & 2: EXECUÇÃO DETERMINÍSTICA DOS ESPECIALISTAS (Zero Custo de IA) ───
-    if (routingPlan.isDeterministicPossible) {
+    if (routingPlan.isDeterministicPossible && !resolvedGroupContext) {
       const repository = dependencies.repoFactory(context);
       const detResult = await fetchAndExecuteSpecialistTurn(
         userPromptText,
@@ -856,13 +1350,92 @@ export async function handleOrchestratorHttpRequest(
     let loadedSummary: string | null = null;
     let contextTruncated = false;
 
+    const senderName = typeof body.sender_name === "string" ? body.sender_name.trim() : undefined;
+    const senderRole = typeof body.sender_role === "string" ? body.sender_role.trim() : userRole;
+    const attachmentPath = typeof body.attachment_path === "string" ? body.attachment_path.trim() : undefined;
+    const attachmentUrl = typeof body.attachment_url === "string" ? body.attachment_url.trim() : undefined;
+    const attachmentMime = typeof body.attachment_mime === "string" ? body.attachment_mime.trim() : undefined;
+    const attachmentName = typeof body.attachment_name === "string" ? body.attachment_name.trim() : undefined;
+    const imageBase64 = typeof body.image_base64 === "string" ? body.image_base64.trim() : undefined;
+    const mirrorToTelegram = body.mirror_to_telegram === true;
+
+    // Fluxo determinístico dedicado para Fechamento da Loja via Web Central de Conversas
+    if (resolvedGroupContext?.tipoGrupo === "fechamento" && dependencies.adminSupabase && conversationId) {
+      const closingRes = await processFechamentoGrupoTurn({
+        supabase: dependencies.adminSupabase,
+        workspaceId: context.workspaceId,
+        userId: context.userId,
+        userRole,
+        grupoId: resolvedGroupContext.id,
+        conversationId,
+        chatId: resolvedGroupContext.chatId,
+        attachmentPath,
+        text: userPromptText,
+        imageBase64,
+        mimeType: attachmentMime,
+        openAiApiKey: dependencies.openaiApiKey,
+        geminiApiKey: dependencies.geminiApiKey,
+        proposalRepo: dependencies.proposalRepo,
+      });
+
+      if (closingRes.handled) {
+        if (dependencies.conversationRepo) {
+          await dependencies.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: context.workspaceId,
+            userId: context.userId,
+            role: "user",
+            content: userPromptText,
+            channel: "web",
+            senderName,
+            senderRole,
+            attachmentPath,
+            attachmentUrl,
+            attachmentMime,
+            attachmentName,
+          });
+          await dependencies.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: context.workspaceId,
+            userId: context.userId,
+            role: "assistant",
+            content: closingRes.responseText,
+            channel: "web",
+          });
+        }
+        return new Response(
+          JSON.stringify({
+            success: true,
+            message: { role: "assistant", content: closingRes.responseText },
+            text: closingRes.responseText,
+            action_proposals: closingRes.proposal ? [closingRes.proposal] : [],
+            fechamento_id: closingRes.fechamentoId,
+            conversation_id: conversationId,
+            correlation_id: correlationId,
+          }),
+          { status: 200, headers: responseHeaders },
+        );
+      }
+    }
+
     if (dependencies.conversationRepo && conversationId) {
       try {
-        const conv = await dependencies.conversationRepo.getConversation(
-          conversationId,
-          context.workspaceId,
-          context.userId,
-        );
+        const repoWithGroup = dependencies.conversationRepo as ConversationRepository & {
+          getGroupConversationById?: (cid: string, wsId: string) => Promise<{
+            id: string;
+            agent_type?: string | null;
+            summary: string | null;
+            is_group?: boolean;
+          } | null>;
+        };
+        const conv =
+          resolvedGroupContext && typeof repoWithGroup.getGroupConversationById === "function"
+            ? await repoWithGroup.getGroupConversationById(conversationId, context.workspaceId)
+            : await dependencies.conversationRepo.getConversation(
+                conversationId,
+                context.workspaceId,
+                context.userId,
+              );
         if (conv) {
           if (conv.agent_type) {
             // Conversa do CEO exige autorização executiva
@@ -921,8 +1494,16 @@ export async function handleOrchestratorHttpRequest(
 
     let chosenSystemPrompt = effectiveAgentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : WALLET_OPERATIONAL_SYSTEM_PROMPT;
 
+    if (resolvedGroupContext) {
+      chosenSystemPrompt = buildGroupSystemPrompt(
+        WALLET_OPERATIONAL_SYSTEM_PROMPT,
+        resolvedGroupContext.tipoGrupo,
+        resolvedGroupContext.nomeGrupo,
+      );
+    }
+
     // Injeção de Contexto do Especialista Designado ou Coordenação Multidepartamental
-    if (routingPlan.coordinatingCeo) {
+    if (routingPlan.coordinatingCeo && !resolvedGroupContext) {
       chosenSystemPrompt += `\n\n[COORDENAÇÃO EXECUTIVA WALLET CEO: MULTIDEPARTAMENTAL]\nVocê está coordenando os seguintes especialistas: ${routingPlan.contributingSpecialists.map((s) => SPECIALIST_AGENTS_REGISTRY[s]?.name || s).join(", ")}.\nSintetize a resposta com visão executiva holística cruzando faturamento bruto (PDV), CMV de insumos (Estoque) e despesas operacionais/lucro líquido (Financeiro).`;
     } else if (primarySpecialistContract) {
       chosenSystemPrompt += `\n\n[ESPECIALISTA DESIGNADO: ${primarySpecialistContract.name} — ${primarySpecialistContract.department}]\n${primarySpecialistContract.systemPromptSnippet}`;
@@ -1000,6 +1581,14 @@ export async function handleOrchestratorHttpRequest(
         }
       }
       catalog = specialistRestrictedCatalog;
+    }
+
+    if (resolvedGroupContext) {
+      catalog = filterCatalogForGroup(
+        catalog,
+        resolvedGroupContext.tipoGrupo,
+        resolvedGroupContext.ferramentasPermitidas,
+      );
     }
 
     const runner = dependencies.runnerFactory(effectiveModel);
@@ -1120,6 +1709,12 @@ export async function handleOrchestratorHttpRequest(
     if (dependencies.saveProposalFn && turnResult.actionProposals && turnResult.actionProposals.length > 0) {
       for (const proposal of turnResult.actionProposals) {
         try {
+          if (resolvedGroupContext?.id && !proposal.grupoId) {
+            proposal.grupoId = resolvedGroupContext.id;
+          }
+          if (conversationId && !proposal.conversationId) {
+            proposal.conversationId = conversationId;
+          }
           await dependencies.saveProposalFn(context, proposal);
         } catch (propErr) {
           console.warn("[handler] Falha ao persistir proposta no banco:", propErr);
@@ -1139,7 +1734,13 @@ export async function handleOrchestratorHttpRequest(
             userId: context.userId,
             role: "user",
             content: lastUserMsg.content,
-            channel: memoryChannel,
+            channel: memoryChannel as "web" | "telegram",
+            ...(senderName ? { senderName } : {}),
+            ...(senderRole ? { senderRole } : {}),
+            ...(attachmentPath ? { attachmentPath } : {}),
+            ...(attachmentUrl ? { attachmentUrl } : {}),
+            ...(attachmentMime ? { attachmentMime } : {}),
+            ...(attachmentName ? { attachmentName } : {}),
           });
         }
         if (turnResult.finalMessage?.content) {
@@ -1150,8 +1751,30 @@ export async function handleOrchestratorHttpRequest(
             role: "assistant",
             content: turnResult.finalMessage.content,
             tokensCount: turnResult.usage.totalTokens,
-            channel: memoryChannel,
+            channel: memoryChannel as "web" | "telegram",
           });
+        }
+
+        // Espelhamento opcional para o Telegram quando originado da Web em grupo vinculado
+        if (
+          mirrorToTelegram &&
+          resolvedGroupContext?.chatId &&
+          dependencies.telegramBotToken &&
+          turnResult.finalMessage?.content
+        ) {
+          try {
+            const prefixAuthor = senderName ? `[Wallet Web — ${senderName}]\n` : "";
+            await fetch(`https://api.telegram.org/bot${dependencies.telegramBotToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: resolvedGroupContext.chatId,
+                text: `${prefixAuthor}${turnResult.finalMessage.content}`.slice(0, 4000),
+              }),
+            });
+          } catch (tgMirrorErr) {
+            console.warn("[handler] Falha ao espelhar resposta Web para grupo Telegram:", tgMirrorErr);
+          }
         }
 
         // Ciclo de Sumarização Canônica Real (Threshold -> Chamada -> Scoped Update -> Fail-safe)

@@ -8,6 +8,7 @@ export interface ProposalRow {
   workspace_id: string;
   user_id: string;
   conversation_id: string | null;
+  grupo_id?: string | null;
   action_type: string;
   action_version: string;
   risk_level: string | null;
@@ -28,6 +29,7 @@ export function mapRowToProposal(row: ProposalRow): ActionProposal {
     workspaceId: row.workspace_id,
     userId: row.user_id,
     conversationId: row.conversation_id ?? undefined,
+    grupoId: row.grupo_id ?? null,
     actionType: row.action_type,
     actionVersion: row.action_version,
     riskLevel: (row.risk_level as ActionRiskLevel) ?? "MEDIUM",
@@ -68,7 +70,7 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
   constructor(private readonly client: SupabaseClient) {}
 
   async saveProposal(proposal: ActionProposal): Promise<void> {
-    const row = {
+    const row: Record<string, unknown> = {
       id: proposal.id,
       workspace_id: proposal.workspaceId,
       user_id: proposal.userId,
@@ -86,6 +88,10 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
       executed_at: proposal.executedAt ?? null,
       created_at: proposal.createdAt,
     };
+
+    if (proposal.grupoId !== undefined) {
+      row.grupo_id = proposal.grupoId;
+    }
 
     const { error } = await this.client
       .from("wallet_ai_action_proposals")
@@ -173,12 +179,20 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
       };
     }
 
-    // RBAC Approval policy (Política B: RBAC WORKSPACE):
-    // - owner & admin: podem aprovar propostas de qualquer membro do workspace
+    // RBAC Approval policy (Política B: RBAC WORKSPACE + Grupo):
+    // - owner & admin: podem aprovar propostas do workspace (desde que autorizados no grupo, se houver)
+    // - participante de grupo com permissão 'confirmar_operacoes': pode aprovar propostas LOW/MEDIUM desse grupo
     // - member: só pode aprovar suas próprias propostas
     const isElevated = userRole === "owner" || userRole === "admin";
+    let isGroupAuthorizedConfirmer = false;
+    if (!isElevated && currentProposal.grupoId) {
+      isGroupAuthorizedConfirmer = await this.hasGroupConfirmPermission(
+        currentProposal.grupoId,
+        context.userId,
+      );
+    }
 
-    if (!isElevated && currentProposal.userId !== context.userId) {
+    if (!isElevated && !isGroupAuthorizedConfirmer && currentProposal.userId !== context.userId) {
       return {
         success: false,
         code: "WALLET_AI_ACTION_FORBIDDEN",
@@ -317,9 +331,17 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
 
     // 4. RBAC Cancellation policy:
     // - owner & admin: podem descartar qualquer proposta do workspace
+    // - participante de grupo com confirmar_operacoes: pode descartar proposta do grupo
     // - member: somente suas próprias propostas
     const isElevated = userRole === "owner" || userRole === "admin";
-    if (!isElevated && currentProposal.userId !== context.userId) {
+    let isGroupAuthorizedConfirmer = false;
+    if (!isElevated && currentProposal.grupoId) {
+      isGroupAuthorizedConfirmer = await this.hasGroupConfirmPermission(
+        currentProposal.grupoId,
+        context.userId,
+      );
+    }
+    if (!isElevated && !isGroupAuthorizedConfirmer && currentProposal.userId !== context.userId) {
       return {
         success: false,
         code: "WALLET_AI_ACTION_FORBIDDEN",
@@ -351,5 +373,23 @@ export class SupabaseActionProposalRepository implements IActionProposalReposito
       success: true,
       proposal: mapRowToProposal(data as ProposalRow),
     };
+  }
+
+  private async hasGroupConfirmPermission(grupoId: string, userId: string): Promise<boolean> {
+    try {
+      const { data } = await this.client
+        .from("grupo_participantes")
+        .select("role_no_grupo, permissoes, ativo")
+        .eq("grupo_id", grupoId)
+        .eq("user_id", userId)
+        .maybeSingle();
+
+      if (!data || data.ativo !== true) return false;
+      if (data.role_no_grupo === "leitor") return false;
+      const perms = (data.permissoes ?? {}) as Record<string, unknown>;
+      return perms.confirmar_operacoes === true;
+    } catch {
+      return false;
+    }
   }
 }

@@ -266,6 +266,23 @@ export const CANONICAL_ACTIONS: Record<string, ActionDefinition> = {
     ],
     requiredFields: ["name", "hypothesis"],
   },
+  confirmar_fechamento_caixa: {
+    actionType: "confirmar_fechamento_caixa",
+    riskLevel: "LOW",
+    executionPolicy: "proposal_only",
+    requiresConfirmation: true,
+    reversible: true,
+    auditCategory: "cash_closing_reconciliation",
+    allowedFields: [
+      "fechamento_id",
+      "data_fechamento",
+      "sobra",
+      "envelope_total",
+      "eyemobile_total",
+      "observacao",
+    ],
+    requiredFields: ["fechamento_id"],
+  },
 };
 
 /**
@@ -311,6 +328,7 @@ export interface ActionProposal<TPayload = Record<string, unknown>> {
   workspaceId: string;
   userId: string;
   conversationId?: string;
+  grupoId?: string | null;
   actionType: string;
   actionVersion: string;
   riskLevel: ActionRiskLevel;
