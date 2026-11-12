@@ -21,7 +21,14 @@
 import { CeoExecutiveKpis, TopProdutoFaturamento } from "./CeoFinancialMetricsService";
 import { FinancialConsolidationReport } from "@/domains/finance/services/FinancialConsolidationService";
 import { CeoPeriodRange } from "../utils/ceoDateRanges";
-import { GrowthOpportunity, CommercialExperiment } from "../types";
+import {
+  GrowthOpportunity,
+  CommercialExperiment,
+  StructuredBaseline,
+  AutomatedExperimentMeasurement,
+  EvaluationClassification,
+  BaselineMeasurementType,
+} from "../types";
 
 export interface BriefingSection {
   titulo: string;
@@ -519,16 +526,236 @@ export class CeoIntelligenceEngine {
   }
 
   /**
+   * Gate 2 — Validação Rigorosa de Baseline Real
+   *
+   * Requisitos:
+   * 1. Métrica estruturada (indicador, período de referência, valor inicial, fonte, unidade, amostra, confiabilidade).
+   * 2. Não iniciar sem baseline.
+   * 3. Não aceitar valor '0' como baseline sem confirmação de que o valor real era zero (sample_size > 0).
+   * 4. Não aceitar texto genérico ('pendente', 'a definir', etc.).
+   */
+  public static validateBaseline(
+    rawBaseline: unknown,
+    options?: {
+      sampleSize?: number;
+      indicator?: string;
+      source?: string;
+    }
+  ): {
+    valid: boolean;
+    reason?: string;
+    baseline?: StructuredBaseline;
+  } {
+    if (rawBaseline === null || rawBaseline === undefined || rawBaseline === '') {
+      return {
+        valid: false,
+        reason: 'O experimento não pode ser iniciado sem um baseline comprovado.',
+      };
+    }
+
+    // Se já for um StructuredBaseline
+    if (typeof rawBaseline === 'object' && rawBaseline !== null) {
+      const b = rawBaseline as Partial<StructuredBaseline>;
+      if (!b.indicator || b.indicator.trim() === '') {
+        return { valid: false, reason: 'Indicador do baseline não informado.' };
+      }
+      if (b.initial_value === undefined || b.initial_value === null || !Number.isFinite(b.initial_value)) {
+        return { valid: false, reason: 'Valor numérico inicial do baseline inválido.' };
+      }
+      if (b.initial_value === 0 && (!b.sample_size || b.sample_size <= 0)) {
+        return {
+          valid: false,
+          reason: "O valor '0' não é aceito como baseline sem comprovação documental de que o valor real era zero.",
+        };
+      }
+      return {
+        valid: true,
+        baseline: {
+          indicator: b.indicator,
+          reference_period: b.reference_period || 'Últimos 30 dias',
+          initial_value: b.initial_value,
+          formatted_value: b.formatted_value || (b.unit === 'R$' ? `R$ ${b.initial_value.toFixed(2)}` : `${b.initial_value}`),
+          unit: b.unit || 'R$',
+          source: b.source || 'eyemobile_pdv',
+          sample_size: b.sample_size || (options?.sampleSize ?? 1),
+          reliability: b.reliability || 'alta',
+          measurement_type: b.measurement_type || 'automatica',
+          notes: b.notes,
+        },
+      };
+    }
+
+    // Se for string ou number
+    const strVal = String(rawBaseline).trim();
+    const genericRe = /^(pendente|a definir|definir|teste|nao informado|não informado|n\/a|null|undefined)$/i;
+    if (genericRe.test(strVal)) {
+      return {
+        valid: false,
+        reason: 'Texto genérico não é aceito como baseline comprovado.',
+      };
+    }
+
+    const clean = strVal.replace(/[^0-9,-]/g, '').replace(',', '.');
+    const parsedNum = parseFloat(clean);
+
+    if (isNaN(parsedNum)) {
+      return {
+        valid: false,
+        reason: 'Não foi possível extrair um valor numérico comprovado do baseline informado.',
+      };
+    }
+
+    if (parsedNum === 0) {
+      const sample = options?.sampleSize ?? 0;
+      if (sample <= 0) {
+        return {
+          valid: false,
+          reason: "O valor '0' não é aceito como baseline sem confirmação de que o valor real era zero com amostra observada.",
+        };
+      }
+    }
+
+    return {
+      valid: true,
+      baseline: {
+        indicator: options?.indicator || 'Faturamento / Ticket',
+        reference_period: 'Período anterior ao experimento',
+        initial_value: parsedNum,
+        formatted_value: strVal,
+        unit: strVal.includes('R$') ? 'R$' : strVal.includes('%') ? '%' : 'unidades',
+        source: options?.source || 'eyemobile_pdv',
+        sample_size: options?.sampleSize ?? 1,
+        reliability: (options?.sampleSize ?? 0) >= 7 ? 'alta' : 'media',
+        measurement_type: 'automatica',
+      },
+    };
+  }
+
+  /**
+   * Gate 3 — Medição Financeira Automática a partir de Vendas do PDV (Eyemobile / Transações)
+   *
+   * Requisitos:
+   * 1. Desconsiderar vendas canceladas.
+   * 2. Comparar período do experimento com baseline histórico.
+   * 3. Apresentar resultado financeiro medido, variação percentual real e observações analisadas.
+   * 4. Diferenciar medição automática comprovada de manual e estimada.
+   */
+  public static measureExperimentFromSales(params: {
+    experiment: CommercialExperiment;
+    sales: Array<{
+      valor: number;
+      data: string;
+      status?: string;
+      cancelada?: boolean;
+      tipo?: string;
+    }>;
+    baselineDailyAverage?: number;
+    baselineSampleSize?: number;
+    baselinePeriod?: string;
+    experimentDaysCount?: number;
+    measurementType?: BaselineMeasurementType;
+  }): AutomatedExperimentMeasurement {
+    const {
+      experiment,
+      sales,
+      baselineDailyAverage = 0,
+      baselineSampleSize = 0,
+      baselinePeriod = 'Período de referência histórico',
+      experimentDaysCount,
+      measurementType = 'automatica',
+    } = params;
+
+    // 1. Desconsiderar vendas canceladas ou estornadas
+    const validSales = (sales || []).filter((s) => {
+      const st = (s.status || '').toLowerCase();
+      if (st === 'cancelada' || st === 'estornada' || st === 'cancelled') return false;
+      if (s.cancelada === true) return false;
+      if (s.tipo && s.tipo !== 'receita') return false;
+      return Number(s.valor || 0) > 0;
+    });
+
+    const sampleSize = validSales.length;
+    const totalRevenue = validSales.reduce((acc, s) => acc + Number(s.valor || 0), 0);
+    const averageTicket = sampleSize > 0 ? Math.round((totalRevenue / sampleSize) * 100) / 100 : 0;
+
+    const distinctDates = new Set(validSales.map((s) => s.data.slice(0, 10)));
+    const calculatedDays = distinctDates.size;
+    const daysCount = Math.max(1, experimentDaysCount || calculatedDays || 1);
+
+    const currentDailyAverage = Math.round((totalRevenue / daysCount) * 100) / 100;
+    const deltaAbs = Math.round((currentDailyAverage - baselineDailyAverage) * 100) / 100;
+
+    let deltaPercent: number | null = null;
+    if (baselineDailyAverage > 0) {
+      deltaPercent = Math.round(((currentDailyAverage - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+    }
+
+    const financialImpact = Math.round(deltaAbs * daysCount * 100) / 100;
+
+    // Suficiência estatística: mínimo 3 dias com vendas ou mínimo 5 pedidos
+    const isStatisticallySufficient = calculatedDays >= 3 || sampleSize >= 5;
+
+    let classification: EvaluationClassification = 'dados_indisponiveis';
+    let notes = '';
+
+    if (sampleSize === 0) {
+      classification = 'dados_indisponiveis';
+      notes = 'Nenhuma venda confirmada registrada no período do experimento.';
+    } else if (!isStatisticallySufficient) {
+      classification = 'inconcluso';
+      notes = `Amostra preliminar (${sampleSize} vendas em ${calculatedDays} dias). Necessário maior período para relevância estatística.`;
+    } else if (deltaAbs > 0) {
+      classification = 'favoravel';
+      notes = `Resultado favorável com impacto financeiro incremental medido de R$ ${financialImpact.toFixed(2)}.`;
+    } else {
+      classification = 'desfavoravel';
+      notes = `Resultado desfavorável com variação diária de R$ ${deltaAbs.toFixed(2)} em relação ao baseline.`;
+    }
+
+    return {
+      experimentId: experiment.id,
+      baseline: {
+        indicator: experiment.target_kpi || 'Faturamento Diário',
+        value: baselineDailyAverage,
+        sampleSize: baselineSampleSize,
+        period: baselinePeriod,
+      },
+      measurement: {
+        currentValue: currentDailyAverage,
+        sampleSize,
+        period: `${experiment.start_date} até o momento (${daysCount} dias operacionais)`,
+        totalRevenue,
+        orderCount: sampleSize,
+        averageTicket,
+      },
+      delta: {
+        absolute: deltaAbs,
+        percent: deltaPercent,
+      },
+      financialImpact,
+      classification,
+      measurementType,
+      isStatisticallySufficient,
+      notes,
+    };
+  }
+
+  /**
    * 4.4 — Ciclo de Vida de Experimentos Comerciais (antes/depois e baseline)
+   * Avaliação estatisticamente válida:
+   * - Nunca inventa 100% de ganho quando baseline é 0 ou ausente.
+   * - Classificação rigorosa: favoravel, desfavoravel, inconcluso, dados_indisponiveis.
    */
   public static evaluateExperimentProgress(
     experiment: CommercialExperiment,
     currentKpiValue: number
   ): {
     status: CommercialExperiment["status"];
-    evolucaoPercent: number;
+    evolucaoPercent: number | null;
     resultadoObservado: string;
     conclusaoRecomendada: "manter" | "encerrar" | "ajustar";
+    classificacao: EvaluationClassification;
+    baselineComprovado: boolean;
   } {
     const parsePtBrNumber = (val: string | number | undefined | null): number => {
       if (val == null) return 0;
@@ -537,20 +764,33 @@ export class CeoIntelligenceEngine {
       return parseFloat(clean) || 0;
     };
 
+    const hasBaseline = experiment.baseline_value !== undefined && experiment.baseline_value !== null && experiment.baseline_value !== '';
     const baseline = parsePtBrNumber(experiment.baseline_value);
     const target = parsePtBrNumber(experiment.target_value) || baseline;
 
-    let evolucaoPercent = 0;
-    if (baseline > 0) {
-      evolucaoPercent = Math.round(((currentKpiValue - baseline) / baseline) * 1000) / 10;
-    } else if (currentKpiValue > 0) {
-      evolucaoPercent = 100;
+    if (!hasBaseline || baseline <= 0) {
+      return {
+        status: experiment.status,
+        evolucaoPercent: null,
+        resultadoObservado: `Baseline: Não informado ou não comprovado -> Atual: ${currentKpiValue.toFixed(2)}. Não é possível calcular ganho percentual sem baseline inicial comprovado.`,
+        conclusaoRecomendada: "ajustar",
+        classificacao: "dados_indisponiveis",
+        baselineComprovado: false,
+      };
     }
 
+    const evolucaoPercent = Math.round(((currentKpiValue - baseline) / baseline) * 1000) / 10;
     const atingiuMeta = target > baseline ? currentKpiValue >= target : currentKpiValue <= target;
     const conclusaoRecomendada = atingiuMeta ? "manter" : evolucaoPercent > 0 ? "ajustar" : "encerrar";
 
-    const resultadoObservado = `Baseline: ${experiment.baseline_value || "Não informado"} -> Atual: ${currentKpiValue.toFixed(2)} (${
+    let classificacao: EvaluationClassification = "inconcluso";
+    if (atingiuMeta || evolucaoPercent > 0) {
+      classificacao = "favoravel";
+    } else {
+      classificacao = "desfavoravel";
+    }
+
+    const resultadoObservado = `Baseline: ${experiment.baseline_value} -> Atual: ${currentKpiValue.toFixed(2)} (${
       evolucaoPercent >= 0 ? "+" : ""
     }${evolucaoPercent}%). Meta: ${experiment.target_value || "A definir"}.`;
 
@@ -559,6 +799,8 @@ export class CeoIntelligenceEngine {
       evolucaoPercent,
       resultadoObservado,
       conclusaoRecomendada,
+      classificacao,
+      baselineComprovado: true,
     };
   }
 }

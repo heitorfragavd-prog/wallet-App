@@ -211,10 +211,25 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
     const todayIso = new Date().toISOString().slice(0, 10);
     const baseline = startBaselineInput.trim() ? startBaselineInput.trim() : null;
 
+    // Gate 2: Validação rigorosa de baseline real comprovado
+    const validation = CeoIntelligenceEngine.validateBaseline(baseline, {
+      indicator: startModalExp.target_kpi || 'Faturamento / Ticket',
+      source: 'eyemobile_pdv',
+    });
+
+    if (!validation.valid) {
+      toast({
+        title: 'Baseline Real Obrigatório',
+        description: validation.reason || 'Informe uma métrica de partida comprovada.',
+        variant: 'destructive',
+      });
+      return;
+    }
+
     const res = await CeoRepository.updateExperiment(startModalExp.id, {
       status: 'em_andamento',
       start_date: todayIso,
-      baseline_value: baseline,
+      baseline_value: validation.baseline?.formatted_value || baseline,
       current_value: 'Em medição inicial',
       currentStatus: startModalExp.status,
     });
@@ -780,9 +795,14 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
               </div>
 
               <div className="space-y-1.5">
-                <label className="font-semibold text-slate-300">
-                  Baseline Inicial (Métrica atual antes do experimento):
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="font-semibold text-slate-300">
+                    Baseline Inicial (Métrica comprovada antes do experimento):
+                  </label>
+                  <Badge variant="outline" className="text-[9px] border-emerald-500/40 text-emerald-400 bg-emerald-950/20">
+                    Obrigatório
+                  </Badge>
+                </div>
                 <Input
                   value={startBaselineInput}
                   onChange={(e) => setStartBaselineInput(e.target.value)}
@@ -790,7 +810,7 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
                   className="h-9 text-xs bg-slate-950 border-slate-800"
                 />
                 <span className="text-[10px] text-muted-foreground">
-                  O valor de partida permite medir com precisão o impacto líquido posterior.
+                  Métrica de partida comprovada. Textos genéricos ou valor zero sem comprovação são rejeitados.
                 </span>
               </div>
 
