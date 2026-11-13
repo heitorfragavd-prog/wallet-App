@@ -101,7 +101,9 @@ describe('ETAPA 09 — PR A: Auditoria e Contratos de Metas Empresariais (Gates 
         range: vi.fn().mockResolvedValue({ data: mockRows, error: null }),
       };
 
-      (supabase.from as any).mockReturnValue(mockQueryBuilder);
+      vi.mocked(supabase.from).mockReturnValue(
+        mockQueryBuilder as unknown as ReturnType<typeof supabase.from>
+      );
 
       const sales = await CeoRepository.fetchSalesForExperiment('ws-1', '2026-11-01', '2026-11-03');
 

@@ -507,7 +507,15 @@ export class CeoRepository {
           cancelada: false,
           tipo: String(t.tipo || 'receita'),
           deduplication_key: rawDedup || undefined,
-          itens: Array.isArray(t.itens) ? (t.itens as any) : undefined,
+          itens: Array.isArray(t.itens)
+            ? (t.itens as unknown as Array<{
+                nome?: string;
+                produto_id?: string;
+                quantidade: number;
+                valor_unitario?: number;
+                custo_unitario?: number;
+              }>)
+            : undefined,
         });
       }
 

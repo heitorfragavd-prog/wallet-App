@@ -91,7 +91,7 @@ export class CeoGoalsRepository {
         status: (d.status as BusinessGoalStatus) || 'ativa',
         descricao: d.descricao ? String(d.descricao) : null,
         observacoes: d.observacoes ? String(d.observacoes) : null,
-        history: Array.isArray(d.history) ? (d.history as any) : [],
+        history: Array.isArray(d.history) ? (d.history as unknown as BusinessGoal['history']) : [],
         created_at: String(d.created_at || new Date().toISOString()),
         updated_at: String(d.updated_at || new Date().toISOString()),
       }));
@@ -170,7 +170,7 @@ export class CeoGoalsRepository {
         return { success: false, error: error.message };
       }
 
-      return { success: true, data: data as any };
+      return { success: true, data: data as unknown as BusinessGoal };
     } catch (err: unknown) {
       const errorMsg = err instanceof Error ? err.message : String(err);
       return { success: false, error: errorMsg };
