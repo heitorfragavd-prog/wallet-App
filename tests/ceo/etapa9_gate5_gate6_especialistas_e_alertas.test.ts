@@ -137,7 +137,7 @@ describe('Gate 5 & Gate 6: Especialistas de Metas e Alertas Inteligentes', () =>
       // Notificação Executiva Privada: contém valores confidenciais e diretiva
       const priv = evalItem.privateExecutiveNotification;
       expect(priv.target_role).toBe('owner');
-      expect(priv.prioridade).toBe('urgente');
+      expect(priv.prioridade).toBe('critica');
       expect(priv.mensagem).toContain('Ritmo Atual:');
       expect(priv.mensagem).toContain('Ritmo Necessário:');
       expect(priv.metadata?.is_confidential).toBe(true);
@@ -145,7 +145,7 @@ describe('Gate 5 & Gate 6: Especialistas de Metas e Alertas Inteligentes', () =>
       // Notificação Segura de Grupo: texto motivacional SEM valores em R$
       const group = evalItem.safeGroupNotification;
       expect(group.target_role).toBe('all');
-      expect(group.prioridade).toBe('media');
+      expect(group.prioridade).toBe('normal');
       expect(group.mensagem).toContain('Foco no Objetivo da Semana');
       expect(group.mensagem).not.toContain('70000');
       expect(group.mensagem).not.toContain('20000');

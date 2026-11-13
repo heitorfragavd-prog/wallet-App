@@ -6,6 +6,8 @@ import {
   BusinessGoalStatus,
   BusinessGoalUnit,
 } from '../types';
+import { CeoRepository } from './CeoRepository';
+import { computeRealizedValueFromRecords } from './CeoGoalsEngine';
 
 export interface CeoGoalsQueryResult<T> {
   data: T[];
@@ -37,7 +39,8 @@ export class CeoGoalsRepository {
     }
 
     try {
-      let query = supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      let query = (supabase as any)
         .from('wallet_business_goals')
         .select('*')
         .eq('workspace_id', workspaceId)
@@ -104,7 +107,68 @@ export class CeoGoalsRepository {
   }
 
   /**
-   * Cadastra nova meta empresarial no workspace (exige prerrogativa executiva de proprietário)
+   * Conecta aos dados financeiros oficiais reais (com deduplicação Eyemobile e filtro de cancelamentos)
+   * para computar o valor realizado de uma meta.
+   */
+  static async fetchGoalRealizedMetric(
+    workspaceId: string,
+    goal: BusinessGoal
+  ): Promise<number> {
+    if (!workspaceId || !goal.data_inicio) return goal.valor_realizado || 0;
+    try {
+      const sales = await CeoRepository.fetchSalesForExperiment(
+        workspaceId,
+        goal.data_inicio,
+        goal.data_fim
+      );
+
+      let expenses: Array<{ valor: number; cancelado?: boolean }> = [];
+      if (goal.indicador === 'despesas' || goal.indicador === 'resultado_operacional') {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const { data: expData } = await (supabase as any)
+          .from('transacoes')
+          .select('valor, cancelada, status')
+          .eq('workspace_id', workspaceId)
+          .gte('data', goal.data_inicio)
+          .lte('data', goal.data_fim)
+          .eq('tipo', 'despesa');
+
+        if (expData) {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          expenses = expData.map((e: any) => ({
+            valor: Number(e.valor || 0),
+            cancelado: Boolean(e.cancelada) || String(e.status || '').toLowerCase() === 'cancelada',
+          }));
+        }
+      }
+
+      return computeRealizedValueFromRecords({
+        indicador: goal.indicador,
+        sales: sales.map((s) => ({
+          valor_total: s.valor,
+          quantidade: s.itens?.reduce((acc, it) => acc + (it.quantidade || 1), 0) || 1,
+          categoria: s.itens?.[0]?.nome,
+          produto_nome: s.itens?.[0]?.nome,
+          eyemobile_product_id: s.itens?.[0]?.produto_id,
+          custo_total: s.itens?.reduce(
+            (acc, it) => acc + (it.custo_unitario != null ? it.custo_unitario * (it.quantidade || 1) : 0),
+            0
+          ),
+          cancelado: s.cancelada,
+          is_combo: Boolean(s.itens?.some((it) => (it.nome || '').toLowerCase().includes('combo'))),
+        })),
+        expenses,
+        categoriaOuProduto: goal.categoria_ou_produto || undefined,
+        eyemobileProductId: goal.eyemobile_product_id || undefined,
+      });
+    } catch (err) {
+      console.error('[CeoGoalsRepository.fetchGoalRealizedMetric] Erro ao computar métrica real:', err);
+      return goal.valor_realizado || 0;
+    }
+  }
+
+  /**
+   * Cadastra nova meta empresarial no workspace (exige prerrogativa executiva de proprietário/administrador)
    */
   static async createGoal(
     workspaceId: string,
@@ -160,7 +224,8 @@ export class CeoGoalsRepository {
         history: initialHistory,
       };
 
-      const { data, error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data, error } = await (supabase as any)
         .from('wallet_business_goals')
         .insert(payload)
         .select()
@@ -188,7 +253,8 @@ export class CeoGoalsRepository {
   ): Promise<CeoGoalsMutationResult<void>> {
     try {
       // 1. Busca meta atual para registrar histórico
-      const { data: current, error: fetchErr } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: current, error: fetchErr } = await (supabase as any)
         .from('wallet_business_goals')
         .select('*')
         .eq('id', goalId)
@@ -231,7 +297,8 @@ export class CeoGoalsRepository {
       if (updates.descricao !== undefined) payload.descricao = updates.descricao;
       if (updates.observacoes !== undefined) payload.observacoes = updates.observacoes;
 
-      const { error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any)
         .from('wallet_business_goals')
         .update(payload)
         .eq('id', goalId);
@@ -262,11 +329,12 @@ export class CeoGoalsRepository {
   }
 
   /**
-   * Exclui uma meta empresarial (exige privilégio do proprietário)
+   * Exclui uma meta empresarial (exige privilégio do proprietário/administrador)
    */
-  static async deleteGoal(goalId: string): Promise<CeoGoalsMutationResult<void>> {
+  static async deleteGoal(goalId: string, _userId?: string): Promise<CeoGoalsMutationResult<void>> {
     try {
-      const { error } = await supabase
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { error } = await (supabase as any)
         .from('wallet_business_goals')
         .delete()
         .eq('id', goalId);

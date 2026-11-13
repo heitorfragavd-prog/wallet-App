@@ -91,6 +91,8 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
 
   const [goals, setGoals] = useState<BusinessGoal[]>([]);
   const [loading, setLoading] = useState(true);
+  const [tableNotConfigured, setTableNotConfigured] = useState(false);
+  const [queryError, setQueryError] = useState<string | null>(null);
 
   // Filtros
   const [filterPeriod, setFilterPeriod] = useState<string>('todas');
@@ -125,13 +127,47 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
   const loadGoals = useCallback(async () => {
     if (!workspaceId) return;
     setLoading(true);
+    setQueryError(null);
+    setTableNotConfigured(false);
     try {
-      const data = await CeoGoalsRepository.listGoals(workspaceId);
-      setGoals(data);
-    } catch {
+      const res = await CeoGoalsRepository.listGoals(workspaceId);
+      const isDirectArray = Array.isArray(res);
+      const isConfigured = isDirectArray ? true : res.isConfigured !== false;
+      const error = isDirectArray ? undefined : res.error;
+      const list = isDirectArray ? (res as unknown as BusinessGoal[]) : (res.data || []);
+
+      if (!isConfigured) {
+        setTableNotConfigured(true);
+        setGoals([]);
+      } else if (error) {
+        setQueryError(error);
+        setGoals([]);
+        toast({
+          title: 'Erro ao carregar metas',
+          description: error,
+          variant: 'destructive',
+        });
+      } else {
+        setGoals(list);
+
+        // Atualização em background dos realizados com os dados mais recentes
+        if (list.length > 0 && typeof CeoGoalsRepository.fetchGoalRealizedMetric === 'function') {
+          Promise.all(
+            list.map(async (g) => {
+              const liveMetric = await CeoGoalsRepository.fetchGoalRealizedMetric(workspaceId, g);
+              return { ...g, valor_realizado: liveMetric };
+            })
+          ).then((updated) => {
+            setGoals(updated);
+          });
+        }
+      }
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Não foi possível carregar as metas empresariais.';
+      setQueryError(msg);
       toast({
         title: 'Erro ao carregar metas',
-        description: 'Não foi possível carregar as metas empresariais.',
+        description: msg,
         variant: 'destructive',
       });
     } finally {
@@ -257,8 +293,11 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
     } else if (kpis.faturamentoOntem > 0) {
       baseWeekly = kpis.faturamentoOntem * 7;
     } else {
-      baseWeekly = 25000;
+      // NUNCA inventar valores fictícios arbitrários
+      return null;
     }
+
+    if (baseWeekly <= 0) return null;
 
     const baseMonthly = kpis.faturamentoMesAnterior > 0 ? kpis.faturamentoMesAnterior : baseWeekly * 4.3;
 
@@ -316,7 +355,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
       const mes = parseInt(mesStr, 10);
 
       if (editingGoal) {
-        await CeoGoalsRepository.updateGoal(
+        const res = await CeoGoalsRepository.updateGoal(
           editingGoal.id,
           {
             titulo: formTitulo,
@@ -327,10 +366,17 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
           },
           user?.id || 'admin'
         );
+        if (!res.success) {
+          toast({
+            title: 'Erro ao Atualizar',
+            description: res.error || 'Falha ao atualizar meta.',
+            variant: 'destructive',
+          });
+          return;
+        }
         toast({ title: 'Meta Atualizada', description: 'Meta empresarial atualizada com sucesso.' });
       } else {
-        await CeoGoalsRepository.createGoal({
-          workspace_id: workspaceId,
+        const res = await CeoGoalsRepository.createGoal(workspaceId, {
           created_by: user?.id || 'admin',
           titulo: formTitulo || 'Nova Meta Empresarial',
           indicador: formIndicador,
@@ -345,6 +391,14 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
           categoria_ou_produto: formCategoria || undefined,
           observacoes: formObservacoes || undefined,
         });
+        if (!res.success) {
+          toast({
+            title: 'Erro ao Criar',
+            description: res.error || 'Falha ao criar meta.',
+            variant: 'destructive',
+          });
+          return;
+        }
         toast({ title: 'Meta Criada', description: 'Meta empresarial cadastrada com governança ativa.' });
       }
 
@@ -361,13 +415,23 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
   const handleTogglePause = async (goal: BusinessGoal) => {
     if (!isOwnerOrAdmin) return;
     try {
-      if (goal.status === 'pausada') {
-        await CeoGoalsRepository.resumeGoal(goal.id, user?.id || 'admin');
-        toast({ title: 'Meta Reativada', description: `A meta "${goal.titulo}" foi reativada.` });
-      } else {
-        await CeoGoalsRepository.pauseGoal(goal.id, user?.id || 'admin');
-        toast({ title: 'Meta Pausada', description: `A meta "${goal.titulo}" foi colocada em pausa.` });
+      const res = goal.status === 'pausada'
+        ? await CeoGoalsRepository.resumeGoal(goal.id, user?.id || 'admin')
+        : await CeoGoalsRepository.pauseGoal(goal.id, user?.id || 'admin');
+
+      if (!res.success) {
+        toast({
+          title: 'Erro ao Alterar Status',
+          description: res.error || 'Não foi possível alterar o status da meta.',
+          variant: 'destructive',
+        });
+        return;
       }
+
+      toast({
+        title: goal.status === 'pausada' ? 'Meta Reativada' : 'Meta Pausada',
+        description: `A meta "${goal.titulo}" foi ${goal.status === 'pausada' ? 'reativada' : 'pausada'}.`,
+      });
       await loadGoals();
     } catch {
       toast({ title: 'Erro', description: 'Não foi possível alterar o status da meta.', variant: 'destructive' });
@@ -378,7 +442,15 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
     if (!isOwnerOrAdmin) return;
     if (!window.confirm(`Tem certeza que deseja excluir a meta "${goal.titulo}"?`)) return;
     try {
-      await CeoGoalsRepository.deleteGoal(goal.id, user?.id || 'admin');
+      const res = await CeoGoalsRepository.deleteGoal(goal.id, user?.id || 'admin');
+      if (!res.success) {
+        toast({
+          title: 'Erro ao Excluir',
+          description: res.error || 'Não foi possível excluir a meta.',
+          variant: 'destructive',
+        });
+        return;
+      }
       toast({ title: 'Meta Excluída', description: 'A meta foi removida com sucesso.' });
       await loadGoals();
     } catch {
@@ -416,7 +488,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
   };
 
   const formatGoalValue = (val: number, unidade: BusinessGoalUnit) => {
-    if (unidade === 'monetario') {
+    if (unidade === 'monetario' || unidade === 'BRL') {
       return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
     }
     if (unidade === 'percentual') {
@@ -427,6 +499,34 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
 
   return (
     <div className="space-y-6">
+      {/* BANNERS DE STATUS: NÃO CONFIGURADO OU ERRO */}
+      {tableNotConfigured && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 shrink-0 text-amber-400 mt-0.5" />
+          <div className="text-xs space-y-1">
+            <p className="font-bold">Módulo de Metas Empresariais Pendente de Migração</p>
+            <p className="text-muted-foreground">
+              A tabela de metas empresariais não foi encontrada no banco de dados. Execute a migração 92 para habilitar o módulo.
+            </p>
+          </div>
+        </div>
+      )}
+
+      {queryError && !tableNotConfigured && (
+        <div className="p-4 rounded-xl bg-red-500/10 border border-red-500/20 text-red-300 flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3 text-xs">
+            <AlertCircle className="w-5 h-5 shrink-0 text-red-400 mt-0.5" />
+            <div>
+              <p className="font-bold">Erro ao Carregar Metas</p>
+              <p className="text-muted-foreground">{queryError}</p>
+            </div>
+          </div>
+          <Button size="sm" variant="outline" onClick={loadGoals} className="h-7 text-xs border-red-500/30">
+            Tentar Novamente
+          </Button>
+        </div>
+      )}
+
       {/* CABEÇALHO */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-5 rounded-2xl bg-card/70 border border-border/50 shadow-sm">
         <div>
@@ -896,33 +996,41 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                   <Sparkles className="w-4 h-4 shrink-0" />
                   <span>Sugestão Inteligente (Base Histórica Real)</span>
                 </div>
-                <p className="text-muted-foreground text-[11px]">
-                  Sua média {formPeriodoTipo === 'semanal' ? 'semanal' : 'mensal'} é de cerca de{' '}
-                  <span className="font-bold text-foreground">
-                    {formatGoalValue(suggestedTargets.base, 'monetario')}
-                  </span>
-                  . Escolha uma sugestão calculada:
-                </p>
-                <div className="flex items-center gap-2 pt-1">
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setFormValorAlvo(String(suggestedTargets.conservadora))}
-                    className="h-7 text-[11px] gap-1 bg-background/50 border-orange-500/30 text-orange-300 hover:bg-orange-500/20"
-                  >
-                    Conservadora (+5%): {formatGoalValue(suggestedTargets.conservadora, 'monetario')}
-                  </Button>
-                  <Button
-                    type="button"
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setFormValorAlvo(String(suggestedTargets.arrojada))}
-                    className="h-7 text-[11px] gap-1 bg-background/50 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20"
-                  >
-                    Arrojada (+10%): {formatGoalValue(suggestedTargets.arrojada, 'monetario')}
-                  </Button>
-                </div>
+                {suggestedTargets ? (
+                  <>
+                    <p className="text-muted-foreground text-[11px]">
+                      Sua média {formPeriodoTipo === 'semanal' ? 'semanal' : 'mensal'} é de cerca de{' '}
+                      <span className="font-bold text-foreground">
+                        {formatGoalValue(suggestedTargets.base, 'monetario')}
+                      </span>
+                      . Escolha uma sugestão calculada:
+                    </p>
+                    <div className="flex items-center gap-2 pt-1">
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setFormValorAlvo(String(suggestedTargets.conservadora))}
+                        className="h-7 text-[11px] gap-1 bg-background/50 border-orange-500/30 text-orange-300 hover:bg-orange-500/20"
+                      >
+                        Conservadora (+5%): {formatGoalValue(suggestedTargets.conservadora, 'monetario')}
+                      </Button>
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setFormValorAlvo(String(suggestedTargets.arrojada))}
+                        className="h-7 text-[11px] gap-1 bg-background/50 border-emerald-500/30 text-emerald-300 hover:bg-emerald-500/20"
+                      >
+                        Arrojada (+10%): {formatGoalValue(suggestedTargets.arrojada, 'monetario')}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-muted-foreground text-[11px] italic">
+                    Histórico insuficiente para sugerir uma meta automática. Informe seu objetivo manualmente.
+                  </p>
+                )}
               </div>
             )}
 
@@ -1142,12 +1250,15 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                         <div className="flex items-center justify-between text-[11px]">
                           <span className="font-bold uppercase text-orange-400">{entry.action}</span>
                           <span className="text-muted-foreground">
-                            {new Date(entry.timestamp).toLocaleString('pt-BR')}
+                            {new Date(entry.date || entry.timestamp || Date.now()).toLocaleString('pt-BR')}
                           </span>
                         </div>
                         <div className="text-muted-foreground text-[11px]">
                           Responsável: <span className="font-mono text-foreground">{entry.user_id}</span>
                         </div>
+                        {entry.reason && (
+                          <div className="text-[11px] text-foreground font-medium">{entry.reason}</div>
+                        )}
                         {entry.details && Object.keys(entry.details).length > 0 && (
                           <pre className="text-[10px] bg-background/50 p-1.5 rounded font-mono text-muted-foreground overflow-x-auto">
                             {JSON.stringify(entry.details, null, 2)}
