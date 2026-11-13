@@ -1747,13 +1747,12 @@ async function syncUserEyemobile(
             while (batchHasMore) {
               const { data: batchExisting, error: searchErr } = await supabaseAdmin
                 .from("transacoes")
-                .select("id, metodo_pagamento, observacoes, itens")
+                .select("id, metodo_pagamento, observacoes, itens, descricao, deduplication_key")
                 .eq("user_id", user_id)
                 .eq("workspace_id", syncWorkspaceId)
                 .eq("tipo", "receita")
                 .gte("data", safeMinDate)
                 .lte("data", safeMaxDate)
-                .ilike("observacoes", "%Integrado via Eyemobile API. Venda: #%")
                 .range(batchOffset, batchOffset + BATCH_PAGE_SIZE - 1);
 
               if (searchErr) {
@@ -1762,8 +1761,14 @@ async function syncUserEyemobile(
               }
               if (batchExisting && Array.isArray(batchExisting)) {
                 for (const es of batchExisting) {
+                  const dedupKey = es.deduplication_key;
+                  if (typeof dedupKey === "string" && dedupKey.startsWith("eyemobile:")) {
+                    const sid = dedupKey.replace("eyemobile:", "").trim();
+                    if (sid) existingMap.set(sid, { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
+                  }
                   const obs = es.observacoes || "";
-                  const match = obs.match(/Venda:\s*#(\d+)/i);
+                  const desc = es.descricao || "";
+                  const match = obs.match(/Venda:\s*#(\d+)/i) || desc.match(/#(\d+)/);
                   const sid = match ? match[1] : null;
                   if (sid) {
                     existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
@@ -1846,7 +1851,8 @@ async function syncUserEyemobile(
               continue;
             }
 
-            // Insert main sale revenue
+            // Insert main sale revenue with canonical deduplication_key
+            const dedupKey = `eyemobile:${sale.id}`;
             const { error: revErr } = await supabaseAdmin.from("transacoes").insert({
               user_id: user_id,
               workspace_id: syncWorkspaceId,
@@ -1860,13 +1866,26 @@ async function syncUserEyemobile(
               metodo_pagamento: mappedMethod,
               itens: Array.isArray(sale.transaction_items) ? sale.transaction_items : null,
               observacoes: saleMarker + (storeName ? ` | Loja: ${storeName}` : "") + (payTypeName ? ` | Pagamento: ${payTypeName}` : ""),
+              deduplication_key: dedupKey,
             });
 
             if (revErr) {
+              // Idempotência estrita: se a venda já existe no banco (violação do índice único idx_transacoes_wallet_ai_dedup),
+              // trata como sucesso idempotente e preserva a integridade sem duplicar.
+              if (
+                revErr.code === "23505" ||
+                revErr.message?.includes("idx_transacoes_wallet_ai_dedup") ||
+                revErr.message?.includes("duplicate key")
+              ) {
+                console.log(`[eyemobile-sync] Venda #${sale.id} já existente (idempotência garantida via deduplication_key).`);
+                existingMap.set(String(sale.id), { id: "existing", metodo_pagamento: mappedMethod, itens: sale.transaction_items });
+                continue;
+              }
               console.error("Erro ao inserir receita de venda:", revErr);
               syncErrors.push(`Erro na venda ${sale.id}: ${revErr.message}`);
               continue;
             }
+            existingMap.set(String(sale.id), { id: "inserted", metodo_pagamento: mappedMethod, itens: sale.transaction_items });
             salesCount++;
           }
 

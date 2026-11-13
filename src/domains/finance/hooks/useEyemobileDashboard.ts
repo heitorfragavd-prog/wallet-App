@@ -119,7 +119,9 @@ async function buildLocalFallbackDashboard(
       .like("descricao", "Venda Eyemobile %")
       .gte("data", filters.startDate)
       .lte("data", filters.endDate)
-      .order("data", { ascending: false });
+      .order("data", { ascending: false })
+      .order("created_at", { ascending: false })
+      .order("id", { ascending: false });
 
     if (workspaceId) {
       query = query.eq("workspace_id", workspaceId);
@@ -146,8 +148,10 @@ async function buildLocalFallbackDashboard(
   // Deduplicação estrita por ID de venda para blindar contra duplicidades históricas
   const seenSaleIds = new Set<string>();
   let transacoes = allTransacoes.filter((t) => {
+    const dedupKey = (t as { deduplication_key?: string }).deduplication_key;
+    const keyId = typeof dedupKey === "string" && dedupKey.startsWith("eyemobile:") ? dedupKey.replace("eyemobile:", "") : null;
     const match = t.descricao?.match(/#(\d+)/) || t.observacoes?.match(/#(\d+)/);
-    const saleId = match ? match[1] : t.id;
+    const saleId = keyId || (match ? match[1] : t.id);
     if (seenSaleIds.has(saleId)) return false;
     seenSaleIds.add(saleId);
     return true;
