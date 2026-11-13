@@ -34,9 +34,10 @@ import { CeoCommercialAnalysisTab } from '@/domains/ceo/components/CeoCommercial
 import { CeoExpenseAnalysisTab } from '@/domains/ceo/components/CeoExpenseAnalysisTab';
 import { CeoNetProfitAnalysisTab } from '@/domains/ceo/components/CeoNetProfitAnalysisTab';
 import { CeoOpportunitiesTab } from '@/domains/ceo/components/CeoOpportunitiesTab';
+import { CeoGoalsTab } from '@/domains/ceo/components/CeoGoalsTab';
 import { ExecutiveReportsTab } from '@/domains/ceo/components/ExecutiveReportsTab';
 import { AgentV2Tab } from '@/domains/ia/components/AgentV2Tab';
-import { Bot } from 'lucide-react';
+import { Bot, Target } from 'lucide-react';
 import {
   CeoFinancialMetricsService,
   CeoExecutiveKpis,
@@ -360,6 +361,13 @@ export const WalletCeoPage: React.FC = () => {
               </span>
             </TabsTrigger>
             <TabsTrigger
+              value="goals"
+              className="h-11 sm:h-10 text-xs font-semibold gap-2 px-3 py-2 rounded-lg flex items-center justify-center transition-all duration-200 data-[state=active]:bg-orange-500 data-[state=active]:text-white data-[state=active]:shadow-sm data-[state=active]:font-bold"
+            >
+              <Target className="w-4 h-4 text-orange-400 shrink-0" />
+              <span>Metas & Desempenho</span>
+            </TabsTrigger>
+            <TabsTrigger
               value="brain-ceo"
               className="h-11 sm:h-10 text-xs font-semibold gap-2 px-3 py-2 rounded-lg flex items-center justify-center transition-all duration-200 data-[state=active]:bg-amber-500 data-[state=active]:text-amber-950 data-[state=active]:shadow-sm data-[state=active]:font-bold border border-amber-500/30 text-amber-400 hover:text-amber-300"
             >
@@ -492,6 +500,11 @@ export const WalletCeoPage: React.FC = () => {
                 ))}
               </div>
             )}
+          </TabsContent>
+
+          {/* ABA: Metas & Desempenho Empresarial (Gate 4 - Etapa 09) */}
+          <TabsContent value="goals" className="space-y-6 focus-visible:outline-none">
+            <CeoGoalsTab workspaceId={workspaceId} kpis={executiveKpis} />
           </TabsContent>
 
           {/* ABA: Cérebro CEO Estratégico (Gate 2 - Etapa 03) */}
