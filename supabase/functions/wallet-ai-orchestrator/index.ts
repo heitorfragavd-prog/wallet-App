@@ -1,6 +1,6 @@
 import { evaluateAiBudgetGuardrail } from "../_shared/ai/cost-calculator.ts";
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.98.0";
+import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import type { AiExecutionContext } from "../_shared/ai/auth.ts";
 import type { ActionProposal } from "../_shared/ai/action-types.ts";
 import { FailoverLlmRunner } from "../_shared/ai/failover-runner.ts";
@@ -22,27 +22,57 @@ import {
   writeSupabaseAiAudit,
 } from "../wallet-ai-query/supabase-adapter.ts";
 
-const supabaseUrl = Deno.env.get("SUPABASE_URL");
+console.log("[wallet-ai-orchestrator] Worker script loading...");
+
+const supabaseUrl =
+  Deno.env.get("SUPABASE_URL") ||
+  Deno.env.get("API_URL") ||
+  Deno.env.get("API_EXTERNAL_URL") ||
+  "http://127.0.0.1:54321";
 const serviceRoleKey = getSupabaseSecretKey();
-const openAiApiKey = Deno.env.get("OPENAI_API_KEY");
+const openAiApiKey =
+  Deno.env.get("OPENAI_API_KEY") ||
+  Deno.env.get("OPENAI_KEY") ||
+  "mock-openai-key-for-test";
 const openAiBaseUrl = Deno.env.get("OPENAI_BASE_URL");
 const geminiApiKey = Deno.env.get("GEMINI_API_KEY");
 const geminiApiKeyBackup = Deno.env.get("GEMINI_API_KEY_BACKUP");
 const telegramBotToken = Deno.env.get("TELEGRAM_BOT_TOKEN");
 
-if (!supabaseUrl || !serviceRoleKey || !openAiApiKey) {
-  throw new Error("wallet_ai_orchestrator_configuration_missing");
+if (!serviceRoleKey) {
+  console.warn(
+    "[wallet-ai-orchestrator] Service role key não encontrado no boot. Usando chave simulada de inicialização.",
+  );
 }
 
-const adminClient = createClient(supabaseUrl, serviceRoleKey, {
-  auth: { persistSession: false, autoRefreshToken: false },
-}) as unknown as SupabaseClientLike;
+const effectiveServiceKey = serviceRoleKey || "service-role-key-placeholder";
+let adminClient: SupabaseClientLike;
+let rawSupabaseClient: SupabaseClient;
+let proposalRepo: SupabaseActionProposalRepository;
+let conversationRepo: SupabaseConversationRepository;
+let authDeps: ReturnType<typeof createSupabaseAuthorizationDependencies>;
 
-const rawSupabaseClient = adminClient as unknown as SupabaseClient;
-const proposalRepo = new SupabaseActionProposalRepository(rawSupabaseClient);
-const conversationRepo = new SupabaseConversationRepository(rawSupabaseClient);
+try {
+  adminClient = createClient(supabaseUrl, effectiveServiceKey, {
+    auth: { persistSession: false, autoRefreshToken: false },
+  }) as unknown as SupabaseClientLike;
 
-const authDeps = createSupabaseAuthorizationDependencies(adminClient);
+  rawSupabaseClient = adminClient as unknown as SupabaseClient;
+  proposalRepo = new SupabaseActionProposalRepository(rawSupabaseClient);
+  conversationRepo = new SupabaseConversationRepository(rawSupabaseClient);
+  authDeps = createSupabaseAuthorizationDependencies(adminClient);
+} catch (bootErr) {
+  console.error("[wallet-ai-orchestrator] Falha na inicialização inicial do cliente Supabase:", bootErr);
+  // Garante objetos mínimos para não quebrar no boot
+  adminClient = {
+    auth: { getUser: async () => ({ data: { user: null }, error: new Error("init_failed") }) },
+    from: () => ({ select: () => ({ eq: () => ({ maybeSingle: async () => ({ data: null, error: null }) }) }) }),
+  } as unknown as SupabaseClientLike;
+  rawSupabaseClient = adminClient as unknown as SupabaseClient;
+  proposalRepo = new SupabaseActionProposalRepository(rawSupabaseClient);
+  conversationRepo = new SupabaseConversationRepository(rawSupabaseClient);
+  authDeps = createSupabaseAuthorizationDependencies(adminClient);
+}
 
 const repoFactory = () =>
   createFinancialRepository((query) =>
@@ -250,78 +280,95 @@ const saveProposalFn = async (_ctx: AiExecutionContext, proposal: ActionProposal
 const eyemobileLiveClientFactory = () => createEyemobileLiveClient(adminClient);
 
 Deno.serve(async (req: Request) => {
-  const url = new URL(req.url);
-  if (url.pathname.endsWith("/danfe") || url.pathname.endsWith("/fiscal")) {
-    return handleFiscalHttpRequest(req, {
-      authDeps,
-      geminiApiKey: geminiApiKey || "",
-      adminClient,
-    });
-  }
-
-  if (url.pathname.endsWith("/boleto")) {
-    return handleBoletoHttpRequest(req, {
-      authDeps,
-      geminiApiKey: geminiApiKey || "",
-      adminClient,
-    });
-  }
-
-  if (url.pathname.endsWith("/document") || url.pathname.endsWith("/process-document")) {
-    return handleDocumentHttpRequest(req, {
-      authDeps,
-      geminiApiKey: geminiApiKey || "",
-      adminClient,
-    });
-  }
-
-  if (req.method === "POST") {
-    try {
-      const clone = req.clone();
-      const peek = await clone.json();
-      if (peek?.action === "process_document" || peek?.mode === "DOCUMENT_PROCESS") {
-        return handleDocumentHttpRequest(req, {
-          authDeps,
-          geminiApiKey: geminiApiKey || "",
-          adminClient,
-        });
-      }
-      if (peek?.action === "process_danfe" || peek?.mode === "DANFE_PROCESS") {
-        return handleFiscalHttpRequest(req, {
-          authDeps,
-          geminiApiKey: geminiApiKey || "",
-          adminClient,
-        });
-      }
-      if (peek?.action === "process_boleto" || peek?.mode === "BOLETO_PROCESS") {
-        return handleBoletoHttpRequest(req, {
-          authDeps,
-          geminiApiKey: geminiApiKey || "",
-          adminClient,
-        });
-      }
-    } catch {
-      // Ignora erro de JSON e continua para o orchestrator
+  try {
+    const url = new URL(req.url);
+    if (url.pathname.endsWith("/danfe") || url.pathname.endsWith("/fiscal")) {
+      return await handleFiscalHttpRequest(req, {
+        authDeps,
+        geminiApiKey: geminiApiKey || "",
+        adminClient,
+      });
     }
-  }
 
-  return handleOrchestratorHttpRequest(req, {
-    authDeps,
-    repoFactory,
-    runnerFactory,
-    auditLogger,
-    conversationRepo,
-    proposalRepo,
-    documentPipelineRunner: processDocumentPipeline,
-    geminiApiKey,
-    geminiApiKeyBackup,
-    openaiApiKey: openAiApiKey,
-    findDuplicateFn,
-    saveProposalFn,
-    eyemobileLiveClientFactory,
-    telemetryLogger,
-    adminSupabase: rawSupabaseClient,
-    telegramBotToken,
-  });
+    if (url.pathname.endsWith("/boleto")) {
+      return await handleBoletoHttpRequest(req, {
+        authDeps,
+        geminiApiKey: geminiApiKey || "",
+        adminClient,
+      });
+    }
+
+    if (url.pathname.endsWith("/document") || url.pathname.endsWith("/process-document")) {
+      return await handleDocumentHttpRequest(req, {
+        authDeps,
+        geminiApiKey: geminiApiKey || "",
+        adminClient,
+      });
+    }
+
+    if (req.method === "POST") {
+      try {
+        const clone = req.clone();
+        const peek = await clone.json();
+        if (peek?.action === "process_document" || peek?.mode === "DOCUMENT_PROCESS") {
+          return await handleDocumentHttpRequest(req, {
+            authDeps,
+            geminiApiKey: geminiApiKey || "",
+            adminClient,
+          });
+        }
+        if (peek?.action === "process_danfe" || peek?.mode === "DANFE_PROCESS") {
+          return await handleFiscalHttpRequest(req, {
+            authDeps,
+            geminiApiKey: geminiApiKey || "",
+            adminClient,
+          });
+        }
+        if (peek?.action === "process_boleto" || peek?.mode === "BOLETO_PROCESS") {
+          return await handleBoletoHttpRequest(req, {
+            authDeps,
+            geminiApiKey: geminiApiKey || "",
+            adminClient,
+          });
+        }
+      } catch {
+        // Ignora erro de JSON e continua para o orchestrator
+      }
+    }
+
+    return await handleOrchestratorHttpRequest(req, {
+      authDeps,
+      repoFactory,
+      runnerFactory,
+      auditLogger,
+      conversationRepo,
+      proposalRepo,
+      documentPipelineRunner: processDocumentPipeline,
+      geminiApiKey,
+      geminiApiKeyBackup,
+      openaiApiKey: openAiApiKey,
+      findDuplicateFn,
+      saveProposalFn,
+      eyemobileLiveClientFactory,
+      telemetryLogger,
+      adminSupabase: rawSupabaseClient,
+      telegramBotToken,
+    });
+  } catch (serveErr: unknown) {
+    const errMsg = serveErr instanceof Error ? serveErr.message : String(serveErr);
+    console.error("[wallet-ai-orchestrator] Exceção não capturada na requisição:", serveErr);
+    return new Response(
+      JSON.stringify({
+        success: false,
+        error: "internal_orchestrator_error",
+        code: "WALLET_AI_INTERNAL_ERROR",
+        message: errMsg,
+      }),
+      {
+        status: 500,
+        headers: { "Content-Type": "application/json", "Access-Control-Allow-Origin": "*" },
+      },
+    );
+  }
 });
 

@@ -44,12 +44,12 @@ export function getSupabaseSecretKey(): string {
     }
   }
 
-  const directSecret = getEnv("SUPABASE_SECRET_KEY");
+  const directSecret = getEnv("SUPABASE_SECRET_KEY") || getEnv("SECRET_KEY");
   if (directSecret && directSecret.trim().length > 0) {
     return directSecret.trim();
   }
 
-  const legacyKey = getEnv("SUPABASE_SERVICE_ROLE_KEY");
+  const legacyKey = getEnv("SUPABASE_SERVICE_ROLE_KEY") || getEnv("SERVICE_ROLE_KEY");
   if (legacyKey && legacyKey.trim().length > 0) {
     return legacyKey.trim();
   }
@@ -76,12 +76,12 @@ export function getSupabasePublishableKey(): string {
     }
   }
 
-  const directPub = getEnv("SUPABASE_PUBLISHABLE_KEY");
+  const directPub = getEnv("SUPABASE_PUBLISHABLE_KEY") || getEnv("PUBLISHABLE_KEY");
   if (directPub && directPub.trim().length > 0) {
     return directPub.trim();
   }
 
-  const legacyAnon = getEnv("SUPABASE_ANON_KEY");
+  const legacyAnon = getEnv("SUPABASE_ANON_KEY") || getEnv("ANON_KEY");
   if (legacyAnon && legacyAnon.trim().length > 0) {
     return legacyAnon.trim();
   }
