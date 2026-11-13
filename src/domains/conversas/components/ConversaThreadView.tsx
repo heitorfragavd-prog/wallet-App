@@ -33,6 +33,7 @@ import {
   type ThreadListItem,
 } from "../types";
 import type { SendMessageOptions } from "../hooks/useCentralConversas";
+import { AudioRecorderButton } from "./AudioRecorderButton";
 import { cn } from "@/lib/utils";
 
 interface ConversaThreadViewProps {
@@ -582,6 +583,13 @@ export const ConversaThreadView: React.FC<ConversaThreadViewProps> = ({
                   </Button>
                 </>
               )}
+
+              <AudioRecorderButton
+                disabled={sending}
+                onTranscriptionComplete={(text) => {
+                  setDraftText((prev) => (prev ? `${prev} ${text}` : text));
+                }}
+              />
 
               <Textarea
                 value={draftText}
