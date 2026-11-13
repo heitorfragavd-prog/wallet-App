@@ -33,13 +33,43 @@ export interface TransacoesQueryParams {
   limit?: number;
 }
 
+interface RawTransacaoRecord {
+  id: string;
+  user_id?: string;
+  workspace_id?: string;
+  categoria_id?: string;
+  tipo?: "receita" | "despesa";
+  descricao?: string;
+  valor?: number;
+  data?: string;
+  created_at?: string;
+  updated_at?: string;
+  metodo_pagamento?: string;
+  conta_id?: string;
+  observacoes?: string;
+  deduplication_key?: string | null;
+  categorias?: {
+    nome: string;
+    cor: string;
+    icone: string;
+  };
+}
+
+interface CommonQueryFilter<T> {
+  eq(col: string, val: unknown): T;
+  gte(col: string, val: unknown): T;
+  lte(col: string, val: unknown): T;
+  order(col: string, opts: { ascending: boolean }): T;
+  limit(count: number): T;
+}
+
 const fetchTransacoesData = async (params: TransacoesQueryParams, workspaceId?: string) => {
   if (!workspaceId) return [];
 
   const { startDate = null, endDate = null, limit = 2000 } = params;
   const CATEGORIAS_EMBED = `categorias!categoria_id (nome, cor, icone)`;
 
-  const applyCommon = (query: any) => {
+  const applyCommon = <T extends CommonQueryFilter<T>>(query: T): T => {
     let q = query.eq("workspace_id", workspaceId);
     if (startDate) q = q.gte("data", startDate);
     if (endDate) q = q.lte("data", endDate);
@@ -52,14 +82,27 @@ const fetchTransacoesData = async (params: TransacoesQueryParams, workspaceId?: 
     applyCommon(supabase.from("despesas").select(`*, ${CATEGORIAS_EMBED}`)),
   ]);
 
-  const mapTransacoes = (transacoesResp.data || []).map((t: any) => ({ ...t, tipo: t.tipo }));
-  const mapReceitas = (receitasResp.data || []).map((r: any) => ({ ...r, tipo: "receita" as const }));
-  const mapDespesas = (despesasResp.data || []).map((d: any) => ({ ...d, tipo: "despesa" as const }));
+  const seenEyemobileSaleIds = new Set<string>();
+  const mapTransacoes = ((transacoesResp.data || []) as RawTransacaoRecord[])
+    .map((t) => ({ ...t, tipo: t.tipo || ("receita" as const) }))
+    .filter((t) => {
+      const isEye = (t.descricao || "").startsWith("Venda Eyemobile") || (t.observacoes || "").includes("Integrado via Eyemobile API");
+      if (!isEye) return true;
+      const dedupKey = t.deduplication_key;
+      const keyId = typeof dedupKey === "string" && dedupKey.startsWith("eyemobile:") ? dedupKey.replace("eyemobile:", "") : null;
+      const match = (t.descricao || "").match(/#(\d+)/) || (t.observacoes || "").match(/#(\d+)/);
+      const saleId = keyId || (match ? match[1] : t.id);
+      if (seenEyemobileSaleIds.has(saleId)) return false;
+      seenEyemobileSaleIds.add(saleId);
+      return true;
+    });
+  const mapReceitas = ((receitasResp.data || []) as RawTransacaoRecord[]).map((r) => ({ ...r, tipo: "receita" as const }));
+  const mapDespesas = ((despesasResp.data || []) as RawTransacaoRecord[]).map((d) => ({ ...d, tipo: "despesa" as const }));
 
   const allTransacoes = [...mapTransacoes, ...mapReceitas, ...mapDespesas];
 
   return allTransacoes.sort((a, b) =>
-    new Date(b.data || b.created_at).getTime() - new Date(a.data || a.created_at).getTime()
+    new Date((b.data || b.created_at) ?? 0).getTime() - new Date((a.data || a.created_at) ?? 0).getTime()
   ) as Transacao[];
 };
 

@@ -275,10 +275,15 @@ export async function fetchReceitas(
     }
 
     if (isEyemobilePDVTransaction(t)) {
-      const idMatch = (t.observacoes || t.descricao || "").match(/Venda Eyemobile #(\d+)/i);
-      if (idMatch?.[1]) {
-        if (seenEyemobileSaleIds.has(idMatch[1])) return false;
-        seenEyemobileSaleIds.add(idMatch[1]);
+      const dedupKey = (t as { deduplication_key?: string }).deduplication_key;
+      const keyId = dedupKey?.startsWith("eyemobile:") ? dedupKey.replace("eyemobile:", "") : null;
+      const textToMatch = `${t.descricao || ""} ${t.observacoes || ""}`;
+      const idMatch = textToMatch.match(/#(\d+)/);
+      const saleId = keyId || (idMatch?.[1] ? idMatch[1] : null);
+
+      if (saleId) {
+        if (seenEyemobileSaleIds.has(saleId)) return false;
+        seenEyemobileSaleIds.add(saleId);
       }
       if (regime !== "bruto") {
         return t.metodo_pagamento === "dinheiro";
