@@ -195,6 +195,17 @@ export function prepareActionProposal<TPayload = Record<string, unknown>>(
   };
 }
 
+export function createPreparedProposal(
+  ctx: AiExecutionContext,
+  input: Omit<PrepareActionInput, "workspaceId" | "userId">,
+): ActionProposal {
+  return prepareActionProposal({
+    ...input,
+    workspaceId: ctx.workspaceId,
+    userId: ctx.userId,
+  });
+}
+
 export interface ValidationResult {
   valid: boolean;
   code?: ActionErrorCode;
