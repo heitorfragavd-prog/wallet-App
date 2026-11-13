@@ -254,7 +254,7 @@ export type BusinessGoalIndicator =
 
 export type BusinessGoalPeriodType = 'semanal' | 'mensal';
 
-export type BusinessGoalUnit = 'BRL' | 'quantidade' | 'percentual';
+export type BusinessGoalUnit = 'BRL' | 'quantidade' | 'percentual' | 'monetario';
 
 export type BusinessGoalStatus = 'ativa' | 'concluida' | 'pausada' | 'cancelada';
 
@@ -265,6 +265,8 @@ export interface BusinessGoalHistoryEntry {
   previous_target?: number;
   new_target?: number;
   reason?: string;
+  details?: string;
+  timestamp?: string;
 }
 
 export interface BusinessGoal {

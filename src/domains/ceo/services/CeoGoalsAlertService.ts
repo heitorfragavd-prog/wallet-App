@@ -86,12 +86,12 @@ export class CeoGoalsAlertService {
           valorRealizado: pacing.valor_realizado,
           valorRestante: pacing.valor_restante,
           diasRestantes: pacing.dias_restantes,
-          mediaDiariaAtual: pacing.mediaDiariaAtual,
-          mediaDiariaNecessaria: pacing.mediaDiariaNecessaria,
+          mediaDiariaAtual: pacing.media_diaria_atual,
+          mediaDiariaNecessaria: pacing.media_diaria_necessaria,
           privateExecutiveNotification: {
             workspace_id: workspaceId,
             categoria: 'financeiro',
-            prioridade: 'alta',
+            prioridade: 'normal',
             titulo: `🏆 Meta Atingida: ${goal.titulo}`,
             mensagem: privateMsg,
             target_role: 'owner',
@@ -104,7 +104,7 @@ export class CeoGoalsAlertService {
           safeGroupNotification: {
             workspace_id: workspaceId,
             categoria: 'operacional',
-            prioridade: 'media',
+            prioridade: 'normal',
             titulo: '🎉 Meta da Equipe Conquistada!',
             mensagem: groupMsg,
             target_role: 'all',
@@ -123,7 +123,7 @@ export class CeoGoalsAlertService {
         pacing.dias_restantes > 0 &&
         pacing.dias_decorridos > 0
       ) {
-        const prioridade = pacing.status_ritmo === 'critico' ? 'urgente' : 'alta';
+        const prioridade = pacing.status_ritmo === 'critico' ? 'critica' : 'importante';
         const nivelRisco = pacing.status_ritmo === 'critico' ? 'CRÍTICO' : 'ATENÇÃO';
 
         const privateMsg =
@@ -167,7 +167,7 @@ export class CeoGoalsAlertService {
           safeGroupNotification: {
             workspace_id: workspaceId,
             categoria: 'operacional',
-            prioridade: 'media',
+            prioridade: 'normal',
             titulo: '📢 Foco no Objetivo da Operação!',
             mensagem: groupMsg,
             target_role: 'all',
@@ -183,17 +183,36 @@ export class CeoGoalsAlertService {
     return evaluations;
   }
 
+  // Cache de idempotência em memória para evitar notificações duplicadas no mesmo dia/período
+  private static dispatchedToday = new Set<string>();
+
   /**
-   * Dispara a notificação executiva e/ou de grupo conforme permissão e canal.
+   * Dispara a notificação executiva e/ou de grupo conforme permissão e canal,
+   * garantindo idempotência estrita por meta, tipo de alerta e data.
    */
   public static async dispatchEvaluation(
     evaluation: GoalAlertEvaluation,
-    options?: { sendGroupCelebration?: boolean }
+    options?: { sendGroupCelebration?: boolean; force?: boolean }
   ): Promise<DispatchNotificationResponse> {
+    const today = new Date().toISOString().slice(0, 10);
+    const dedupKey = `${evaluation.goalId}:${evaluation.type}:${today}`;
+
+    if (!options?.force && this.dispatchedToday.has(dedupKey)) {
+      return {
+        success: true,
+        workspace_id: evaluation.privateExecutiveNotification.workspace_id,
+        total_destinatarios: 0,
+      };
+    }
+
     // 1. Sempre envia a notificação executiva detalhada para os administradores
     const execRes = await NotificationDispatcherService.dispatch(
       evaluation.privateExecutiveNotification
     );
+
+    if (execRes.success) {
+      this.dispatchedToday.add(dedupKey);
+    }
 
     // 2. Se for celebração de meta batida e habilitado, envia a mensagem segura para todos
     if (evaluation.type === 'goal_achieved' && options?.sendGroupCelebration) {
