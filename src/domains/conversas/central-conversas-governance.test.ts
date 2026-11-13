@@ -105,6 +105,7 @@ describe("Central de Conversas — Segurança, Migração e Governança", () => 
       "contas_empresa",
       "conversas_loja",
       "fechamento",
+      "folguistas",
       "nfe_boletos",
     ]);
   });

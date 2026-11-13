@@ -755,7 +755,13 @@ export async function handleOrchestratorHttpRequest(
       const ownerUserId = (wsInfo as { user_id?: string } | null)?.user_id || context.userId;
       let createdCount = 0;
 
-      for (const tipo of ["fechamento", "nfe_boletos", "contas_empresa", "conversas_loja"] as OperationalGroupType[]) {
+      for (const tipo of [
+        "fechamento",
+        "nfe_boletos",
+        "contas_empresa",
+        "conversas_loja",
+        "folguistas",
+      ] as OperationalGroupType[]) {
         if (existingTypes.has(tipo)) continue;
         const tpl = STANDARD_GROUP_TEMPLATES[tipo];
         const { data: newGroup, error: insErr } = await dependencies.adminSupabase
