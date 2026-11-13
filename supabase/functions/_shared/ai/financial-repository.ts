@@ -19,6 +19,7 @@ import type {
   CommercialExperimentRecord,
   CashClosingRecord,
   OperationalReminderRecord,
+  BusinessGoalRecord,
 } from "./financial-types.ts";
 import type { CanonicalDebt, DatePeriod, FinancialQueryRepository } from "./query-tools.ts";
 
@@ -41,6 +42,7 @@ export interface FinancialDataQuery {
     | "colaborador_acertos"
     | "wallet_growth_opportunities"
     | "wallet_commercial_experiments"
+    | "wallet_business_goals"
     | "fechamentos_caixa"
     | "lembretes"
     | "compromissos";
@@ -715,6 +717,44 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
       }
 
       return results;
+    },
+    async listBusinessGoals(context, params) {
+      const equals: Record<string, unknown> = { workspace_id: context.workspaceId };
+      if (params?.status) {
+        equals.status = params.status;
+      }
+      if (params?.periodo_tipo) {
+        equals.periodo_tipo = params.periodo_tipo;
+      }
+      const rows = await execute({
+        table: "wallet_business_goals",
+        columns:
+          "id,workspace_id,titulo,indicador,periodo_tipo,data_inicio,data_fim,ano,mes,semana_do_ano,valor_alvo,valor_realizado,unidade,categoria_ou_produto,eyemobile_product_id,status,observacoes,created_at",
+        equals,
+      });
+      return rows.map((row): BusinessGoalRecord => {
+        assertScope(row, context);
+        return {
+          id: String(row.id),
+          workspaceId: String(row.workspace_id),
+          titulo: String(row.titulo ?? ""),
+          indicador: String(row.indicador ?? "faturamento"),
+          periodoTipo: String(row.periodo_tipo ?? "semanal"),
+          dataInicio: String(row.data_inicio ?? ""),
+          dataFim: String(row.data_fim ?? ""),
+          ano: Number(row.ano ?? new Date().getFullYear()),
+          mes: row.mes !== null && row.mes !== undefined ? Number(row.mes) : null,
+          semanaDoAno: row.semana_do_ano !== null && row.semana_do_ano !== undefined ? Number(row.semana_do_ano) : null,
+          valorAlvo: Number(row.valor_alvo ?? 0),
+          valorRealizado: Number(row.valor_realizado ?? 0),
+          unidade: String(row.unidade ?? "monetario"),
+          status: String(row.status ?? "ativa"),
+          categoriaOuProduto: row.categoria_ou_produto ? String(row.categoria_ou_produto) : null,
+          eyemobileProductId: row.eyemobile_product_id ? String(row.eyemobile_product_id) : null,
+          observacoes: row.observacoes ? String(row.observacoes) : null,
+          createdAt: String(row.created_at ?? ""),
+        };
+      });
     },
   };
 }
