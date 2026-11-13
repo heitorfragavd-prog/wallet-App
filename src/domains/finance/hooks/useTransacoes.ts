@@ -52,7 +52,18 @@ const fetchTransacoesData = async (params: TransacoesQueryParams, workspaceId?: 
     applyCommon(supabase.from("despesas").select(`*, ${CATEGORIAS_EMBED}`)),
   ]);
 
-  const mapTransacoes = (transacoesResp.data || []).map((t: any) => ({ ...t, tipo: t.tipo }));
+  const seenEyemobileSaleIds = new Set<string>();
+  const mapTransacoes = (transacoesResp.data || []).map((t: any) => ({ ...t, tipo: t.tipo })).filter((t: any) => {
+    const isEye = (t.descricao || "").startsWith("Venda Eyemobile") || (t.observacoes || "").includes("Integrado via Eyemobile API");
+    if (!isEye) return true;
+    const dedupKey = t.deduplication_key;
+    const keyId = typeof dedupKey === "string" && dedupKey.startsWith("eyemobile:") ? dedupKey.replace("eyemobile:", "") : null;
+    const match = (t.descricao || "").match(/#(\d+)/) || (t.observacoes || "").match(/#(\d+)/);
+    const saleId = keyId || (match ? match[1] : t.id);
+    if (seenEyemobileSaleIds.has(saleId)) return false;
+    seenEyemobileSaleIds.add(saleId);
+    return true;
+  });
   const mapReceitas = (receitasResp.data || []).map((r: any) => ({ ...r, tipo: "receita" as const }));
   const mapDespesas = (despesasResp.data || []).map((d: any) => ({ ...d, tipo: "despesa" as const }));
 
