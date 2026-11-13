@@ -215,13 +215,14 @@ serve(async (req: Request) => {
       // 2. Consulta escalas existentes para sábado e domingo
       const { data: escalasFimSemana } = await supabaseAdmin
         .from("colaborador_escalas")
-        .select("id, colaborador_id, data, turno")
+        .select("id, colaborador_id, data, turno, status")
         .eq("workspace_id", ws.id)
         .in("data", [weekend.sabado, weekend.domingo]);
 
       // 3. Identifica vagas cobertas vs descobertas considerando os horários da Rodo Point:
       // Sábado: Manhã (05h00 às 14h30) e Noite (13h00 às 22h30)
       // Domingo: Manhã (05h00 às 14h30) e Noite (13h00 às 22h30)
+      // Gate 5: Vagas com status 'proposta', 'cancelada' ou 'desistencia' NÃO contam como cobertas!
       const vagasDescobertas: VagaDescobertaDetalhe[] = [];
       const turnosVerificar: Array<{ dia: "sabado" | "domingo"; data: string; turno: "manha" | "noite" }> = [
         { dia: "sabado", data: weekend.sabado, turno: "manha" },
@@ -232,10 +233,11 @@ serve(async (req: Request) => {
 
       for (const slot of turnosVerificar) {
         const estaCoberto = (escalasFimSemana || []).some(
-          (e: { data: string; turno: string; colaborador_id: string | null }) =>
+          (e: { data: string; turno: string; colaborador_id: string | null; status?: string }) =>
             e.data === slot.data &&
             (e.turno === slot.turno || (slot.turno === "manha" && e.turno === "abertura") || (slot.turno === "noite" && e.turno === "fechamento")) &&
-            Boolean(e.colaborador_id)
+            Boolean(e.colaborador_id) &&
+            e.status !== "proposta" && e.status !== "cancelada" && e.status !== "recusada" && e.status !== "desistencia"
         );
         if (!estaCoberto) {
           const info = HORARIOS_OFICIAIS_RODO_POINT[slot.dia][slot.turno];
@@ -452,7 +454,7 @@ serve(async (req: Request) => {
 
       const colabMap = new Map((colaboradoresData || []).map((c: { id: string }) => [c.id, c]));
 
-      // 4. Consulta disponibilidades para verificar quem já confirmou
+      // 4. Consulta disponibilidades para verificar quem já confirmou por colaborador, data E turno (Gate 5)
       const { data: disponibilidades } = await supabaseAdmin
         .from("folguistas_disponibilidade")
         .select("colaborador_id, data_referencia, turno, confirmado")
@@ -462,7 +464,8 @@ serve(async (req: Request) => {
 
       const confirmadosSet = new Set(
         (disponibilidades || []).map(
-          (d: { colaborador_id: string; data_referencia: string }) => `${d.colaborador_id}_${d.data_referencia}`
+          (d: { colaborador_id: string; data_referencia: string; turno?: string }) =>
+            `${d.colaborador_id}_${d.data_referencia}_${d.turno || "integral"}`
         )
       );
 
@@ -481,11 +484,15 @@ serve(async (req: Request) => {
       }> = [];
 
       for (const esc of escalados) {
-        const isJaConfirmado = confirmadosSet.has(`${esc.colaborador_id}_${esc.data}`);
+        const turnoNorm: "manha" | "noite" = esc.turno?.toLowerCase().includes("noite") || esc.turno?.toLowerCase().includes("fechamento") ? "noite" : "manha";
+        const isJaConfirmado =
+          confirmadosSet.has(`${esc.colaborador_id}_${esc.data}_${turnoNorm}`) ||
+          confirmadosSet.has(`${esc.colaborador_id}_${esc.data}_${esc.turno}`) ||
+          confirmadosSet.has(`${esc.colaborador_id}_${esc.data}_integral`);
+
         if (!isJaConfirmado) {
           const colab = colabMap.get(esc.colaborador_id) as { nome: string; telegram_user_id: number | null; telegram_username: string | null } | undefined;
           const diaSemana: "sabado" | "domingo" = esc.data === weekend.sabado ? "sabado" : "domingo";
-          const turnoNorm: "manha" | "noite" = esc.turno?.toLowerCase().includes("noite") || esc.turno?.toLowerCase().includes("fechamento") ? "noite" : "manha";
           const dataFmt = diaSemana === "sabado" ? weekend.sabadoFormatado : weekend.domingoFormatado;
           const horarioFmt = HORARIOS_OFICIAIS_RODO_POINT[diaSemana][turnoNorm].horarioFormatado;
           const colabNome = colab?.nome || "Colaborador";
@@ -699,14 +706,32 @@ serve(async (req: Request) => {
       const dataFimMes = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(diasNoMes).padStart(2, "0")}`;
       const { data: escalasExistentes } = await supabaseAdmin
         .from("colaborador_escalas")
-        .select("id, colaborador_id, data, turno, observacao")
+        .select("id, colaborador_id, data, turno, observacao, status")
         .eq("workspace_id", ws.id)
         .gte("data", dataInicioMes)
         .lte("data", dataFimMes);
 
       const slotsExistentesSet = new Set(
-        (escalasExistentes || []).map((e: { data: string; turno: string }) => `${e.data}_${e.turno}`)
+        (escalasExistentes || [])
+          .filter((e: { status?: string }) => e.status === "programada" || e.status === "confirmada")
+          .map((e: { data: string; turno: string }) => `${e.data}_${e.turno}`)
       );
+
+      // Mapeamento histórico de escalas por colaborador para fiscalização estrita do descanso de 11h (Gate 4)
+      const escalasAtribuidasMap = new Map<string, Array<{ data: string; turno: "manha" | "noite" }>>();
+      for (const e of escalasExistentes || []) {
+        if (!e.colaborador_id || e.status === "cancelada" || e.status === "recusada") continue;
+        const list = escalasAtribuidasMap.get(e.colaborador_id) || [];
+        const tNorm: "manha" | "noite" = e.turno?.toLowerCase().includes("noite") ? "noite" : "manha";
+        list.push({ data: e.data, turno: tNorm });
+        escalasAtribuidasMap.set(e.colaborador_id, list);
+      }
+
+      const turnosContadorMap = new Map<string, number>();
+      for (const f of folguistas) {
+        const count = (escalasAtribuidasMap.get(f.id) || []).length;
+        turnosContadorMap.set(f.id, count);
+      }
 
       const propostasGeradas: Array<{
         colaborador_id: string;
@@ -716,9 +741,45 @@ serve(async (req: Request) => {
         observacao: string;
       }> = [];
 
-      let roundRobinIdx = 0;
+      const vagasDescobertasDescanso: Array<{ data: string; turno: string; motivo: string }> = [];
 
-      // 4. Gera proposta para cada fim de semana mantendo regras de descanso
+      // Função auxiliar de verificação estrita do descanso mínimo de 11 horas (Gate 4)
+      const isDescansoValido = (colabId: string, dataSlot: string, turnoSlot: "manha" | "noite"): boolean => {
+        const historico = escalasAtribuidasMap.get(colabId) || [];
+        
+        // 1. Proibição de dois turnos no mesmo dia
+        if (historico.some((h) => h.data === dataSlot)) {
+          return false;
+        }
+
+        // 2. Se for turno da Manhã (início às 05h00):
+        // Não pode ter trabalhado na Noite do dia anterior (término às 22h30 = 6h30 de descanso < 11h)
+        if (turnoSlot === "manha") {
+          const slotDate = new Date(dataSlot + "T12:00:00Z");
+          slotDate.setUTCDate(slotDate.getUTCDate() - 1);
+          const diaAnteriorStr = slotDate.toISOString().split("T")[0];
+          const trabalhouNoiteAnterior = historico.some(
+            (h) => h.data === diaAnteriorStr && h.turno === "noite"
+          );
+          if (trabalhouNoiteAnterior) return false;
+        }
+
+        // 3. Se for turno da Noite (término às 22h30):
+        // Não pode estar escalado na Manhã do dia seguinte (início às 05h00 = 6h30 de descanso < 11h)
+        if (turnoSlot === "noite") {
+          const slotDate = new Date(dataSlot + "T12:00:00Z");
+          slotDate.setUTCDate(slotDate.getUTCDate() + 1);
+          const diaSeguinteStr = slotDate.toISOString().split("T")[0];
+          const trabalhaManhaSeguinte = historico.some(
+            (h) => h.data === diaSeguinteStr && h.turno === "manha"
+          );
+          if (trabalhaManhaSeguinte) return false;
+        }
+
+        return true;
+      };
+
+      // 4. Gera proposta para cada fim de semana respeitando incondicionalmente o descanso de 11h
       for (const slotDia of diasFimSemanaMes) {
         for (const turno of ["manha", "noite"] as const) {
           const keySlot = `${slotDia.data}_${turno}`;
@@ -726,22 +787,46 @@ serve(async (req: Request) => {
             continue; // Preserva escala aprovada existente sem sobrescrever
           }
 
-          if (folguistas.length > 0) {
-            const candidato = folguistas[roundRobinIdx % folguistas.length];
-            roundRobinIdx++;
+          // Filtra candidatos que cumprem as 11 horas de descanso regulamentar
+          const candidatosElegiveis = folguistas.filter((c) =>
+            isDescansoValido(c.id, slotDia.data, turno)
+          );
+
+          if (candidatosElegiveis.length > 0) {
+            // Equilíbrio de turnos: seleciona o colaborador elegível com menor número de turnos atribuídos
+            candidatosElegiveis.sort((a, b) => {
+              const countA = turnosContadorMap.get(a.id) || 0;
+              const countB = turnosContadorMap.get(b.id) || 0;
+              return countA - countB;
+            });
+
+            const escolhido = candidatosElegiveis[0];
+
+            // Atualiza contadores e histórico de escalas para os próximos slots
+            const hist = escalasAtribuidasMap.get(escolhido.id) || [];
+            hist.push({ data: slotDia.data, turno });
+            escalasAtribuidasMap.set(escolhido.id, hist);
+            turnosContadorMap.set(escolhido.id, (turnosContadorMap.get(escolhido.id) || 0) + 1);
 
             propostasGeradas.push({
-              colaborador_id: candidato.id,
-              colaborador_nome: candidato.nome,
+              colaborador_id: escolhido.id,
+              colaborador_nome: escolhido.nome,
               data: slotDia.data,
               turno,
-              observacao: "Proposta Mensal Automática Gerada pelo Servidor - Aguarda Aprovação Executiva",
+              observacao: "PROPOSTA — Aguardando Aprovação Administrativa",
+            });
+          } else {
+            // Nenhum colaborador elegível com descanso legal: registra vaga aberta sem violar a lei
+            vagasDescobertasDescanso.push({
+              data: slotDia.data,
+              turno,
+              motivo: "Vaga mantida aberta: nenhum colaborador com 11h de descanso regulamentar disponível.",
             });
           }
         }
       }
 
-      // Se não estiver em modo de simulação, persiste as propostas em colaborador_escalas
+      // Se não estiver em modo de simulação, persiste as propostas com status inequívoco 'proposta' (Gate 4)
       if (!isSimulacao && propostasGeradas.length > 0) {
         const rowsToInsert = propostasGeradas.map((p) => ({
           workspace_id: ws.id,
@@ -749,6 +834,7 @@ serve(async (req: Request) => {
           data: p.data,
           turno: p.turno,
           observacao: p.observacao,
+          status: "proposta", // Status explícito de proposta administrativa
           valor_diaria: config?.valor_diaria_padrao || 100.0,
           valor_meta: config?.valor_meta_padrao || 20.0,
           valor_total: config?.valor_diaria_padrao || 100.0,
