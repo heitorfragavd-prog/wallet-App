@@ -191,7 +191,7 @@ jobs:
           EOF
 
           # Inicia Edge Functions no runtime compatível local
-          supabase functions serve --env-file .env.functions.test --no-verify-jwt &
+          supabase functions serve --env-file .env.functions.test --no-verify-jwt > /tmp/functions.log 2>&1 &
           sleep 5
 
 
@@ -250,3 +250,12 @@ jobs:
           export INBUCKET_URL=http://127.0.0.1:54324
           export MOCK_PROVIDER_URL=http://127.0.0.1:18080
           npx playwright test tests/security-homologation.spec.ts
+
+      - name: Dump Edge Functions Log on Failure
+        if: always()
+        run: |
+          echo "=== DUMP EDGE FUNCTIONS LOG ==="
+          cat /tmp/functions.log 2>/dev/null || true
+          echo "=== DOCKER LOGS SUPABASE EDGE RUNTIME ==="
+          docker ps -a
+          docker logs $(docker ps -a -q --filter ancestor=supabase/edge-runtime | head -n 1) 2>/dev/null || true

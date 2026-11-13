@@ -370,6 +370,7 @@ export interface ParsedClosingEnvelope {
   envelopeTotal: Record<string, number>;
   sobraInformada: number | null;
   observacao: string | null;
+  turnoHint?: "manha" | "noite" | null;
   extractionSource: "vision_llm" | "deterministic_text" | "partial";
 }
 
@@ -378,6 +379,32 @@ function parseBrMoneyNumber(raw?: string | null): number | null {
   const cleaned = raw.replace(/[R$\s]/gi, "").replace(/\./g, "").replace(",", ".");
   const n = Number(cleaned);
   return Number.isFinite(n) ? Math.round(n * 100) / 100 : null;
+}
+
+/**
+ * Extrai horários em múltiplos formatos brasileiros (13:30, 13h30, 09:15:42, 18H45).
+ */
+export function extractTimeFromText(text?: string | null): string | null {
+  if (!text) return null;
+  const m = text.match(/\b([01]?\d|2[0-3])(?::|h)([0-5]\d)(?::[0-5]\d)?\b/i);
+  if (!m) return null;
+  const hours = m[1].padStart(2, "0");
+  const minutes = m[2];
+  return `${hours}:${minutes}`;
+}
+
+/**
+ * Regra de Turnos 13h30:
+ * Movimentações antes de 13h30 pertencem ao Caixa 1 (Manhã).
+ * Movimentações a partir de 13h30 pertencem ao Caixa 2 (Noite).
+ */
+export function determineShiftByTime(time: string): "manha" | "noite" {
+  const parts = time.split(":");
+  const hours = parseInt(parts[0], 10);
+  const minutes = parts.length > 1 ? parseInt(parts[1], 10) : 0;
+  const totalMinutes = (Number.isNaN(hours) ? 0 : hours) * 60 + (Number.isNaN(minutes) ? 0 : minutes);
+  // 13:30 equivale a 13 * 60 + 30 = 810 minutos
+  return totalMinutes < 810 ? "manha" : "noite";
 }
 
 export function extractCashClosingFromTextDeterministic(
@@ -389,7 +416,7 @@ export function extractCashClosingFromTextDeterministic(
 
   const lower = input.toLowerCase();
   const hasClosingKeyword =
-    /\b(fechamento|caixa|envelope|sobra|gaveta|sangria|dinheiro|pix|debito|débito|credito|crédito)\b/i.test(lower);
+    /\b(fechamento|caixa|envelope|sobra|gaveta|sangria|dinheiro|pix|debito|débito|credito|crédito|voucher|refeição|refeicao|alimentação|alimentacao|sodexo|ticket|alelo|ben|vr|va)\b/i.test(lower);
   if (!hasClosingKeyword) return null;
 
   const findVal = (regex: RegExp): number | null => {
@@ -402,12 +429,24 @@ export function extractCashClosingFromTextDeterministic(
   const pix = findVal(/pix[:\s-]*r?\$?\s*([\d.,]+)/i) ?? 0;
   const debito = findVal(/d[eé]bito[:\s-]*r?\$?\s*([\d.,]+)/i) ?? 0;
   const credito = findVal(/cr[eé]dito[:\s-]*r?\$?\s*([\d.,]+)/i) ?? 0;
+  const voucher =
+    findVal(/(?:voucher|vr|va|refei[cç][aã]o|alimenta[cç][aã]o|sodexo|ticket|alelo|ben)[:\s-]*r?\$?\s*([\d.,]+)/i) ?? 0;
   const totalExplicit = findVal(/total(?:\s+geral|\s+envelope)?[:\s-]*r?\$?\s*([\d.,]+)/i);
   const sobra = findVal(/sobra[:\s-]*r?\$?\s*([\d.,-]+)/i);
   const c1Val = findVal(/caixa\s*1[:\s-]*r?\$?\s*([\d.,]+)/i);
   const c2Val = findVal(/caixa\s*2[:\s-]*r?\$?\s*([\d.,]+)/i);
 
-  const computedTotal = Math.round((dinheiro + pix + debito + credito) * 100) / 100;
+  const timeExtracted = extractTimeFromText(input);
+  let turnoHint: "manha" | "noite" | null = null;
+  if (/\b(caixa\s*1|manh[aã]|turno\s*1)\b/i.test(input)) {
+    turnoHint = "manha";
+  } else if (/\b(caixa\s*2|noite|tarde|turno\s*2)\b/i.test(input)) {
+    turnoHint = "noite";
+  } else if (timeExtracted) {
+    turnoHint = determineShiftByTime(timeExtracted);
+  }
+
+  const computedTotal = Math.round((dinheiro + pix + debito + credito + voucher) * 100) / 100;
   const envelopeGrandTotal =
     totalExplicit !== null
       ? totalExplicit
@@ -421,6 +460,7 @@ export function extractCashClosingFromTextDeterministic(
     pix === 0 &&
     debito === 0 &&
     credito === 0 &&
+    voucher === 0 &&
     sobra === null &&
     c1Val === null &&
     c2Val === null
@@ -428,18 +468,42 @@ export function extractCashClosingFromTextDeterministic(
     return null;
   }
 
+  const caixa1Data: Record<string, number> = {};
+  const caixa2Data: Record<string, number> = {};
+
+  if (c1Val !== null) caixa1Data.total = c1Val;
+  if (c2Val !== null) caixa2Data.total = c2Val;
+
+  if (turnoHint === "manha") {
+    if (dinheiro > 0) caixa1Data.dinheiro = dinheiro;
+    if (pix > 0) caixa1Data.pix = pix;
+    if (debito > 0) caixa1Data.debito = debito;
+    if (credito > 0) caixa1Data.credito = credito;
+    if (voucher > 0) caixa1Data.voucher = voucher;
+    if (!caixa1Data.total) caixa1Data.total = envelopeGrandTotal;
+  } else if (turnoHint === "noite") {
+    if (dinheiro > 0) caixa2Data.dinheiro = dinheiro;
+    if (pix > 0) caixa2Data.pix = pix;
+    if (debito > 0) caixa2Data.debito = debito;
+    if (credito > 0) caixa2Data.credito = credito;
+    if (voucher > 0) caixa2Data.voucher = voucher;
+    if (!caixa2Data.total) caixa2Data.total = envelopeGrandTotal;
+  }
+
   return {
     dataFechamento,
-    caixa1: c1Val !== null ? { total: c1Val } : {},
-    caixa2: c2Val !== null ? { total: c2Val } : {},
+    caixa1: caixa1Data,
+    caixa2: caixa2Data,
     envelopeTotal: {
       dinheiro,
       pix,
       debito,
       credito,
+      ...(voucher > 0 ? { voucher } : {}),
       total: envelopeGrandTotal,
     },
     sobraInformada: sobra,
+    turnoHint,
     observacao: input.slice(0, 400),
     extractionSource: "deterministic_text",
   };
@@ -641,7 +705,7 @@ export async function processFechamentoGrupoTurn(params: {
   // Consulta vendas reais do dia no workspace (Eyemobile PDV / transações de receita)
   const { data: daySales } = await params.supabase
     .from("transacoes")
-    .select("valor, metodo_pagamento, observacoes, descricao")
+    .select("id, valor, metodo_pagamento, observacoes, descricao")
     .eq("workspace_id", params.workspaceId)
     .eq("tipo", "receita")
     .eq("data", parsed.dataFechamento);
@@ -651,11 +715,20 @@ export async function processFechamentoGrupoTurn(params: {
     pix: 0,
     debito: 0,
     credito: 0,
+    voucher: 0,
     outros: 0,
     total: 0,
   };
 
+  const distinctSales = new Set<string>();
   for (const row of daySales || []) {
+    const saleMatch = (row.observacoes || "").match(/Venda:\s*#?([^\s,]+)/i);
+    if (saleMatch) {
+      distinctSales.add(saleMatch[1]);
+    } else if (row.id) {
+      distinctSales.add(String(row.id));
+    }
+
     const valCents = Math.round(Number(row.valor || 0) * 100);
     const mp = String(row.metodo_pagamento || "").toLowerCase();
     if (mp.includes("dinheiro") || mp === "cash") {
@@ -666,6 +739,17 @@ export async function processFechamentoGrupoTurn(params: {
       eyeTotals.debito += valCents;
     } else if (mp.includes("cred")) {
       eyeTotals.credito += valCents;
+    } else if (
+      mp.includes("vouch") ||
+      mp.includes("vale") ||
+      mp.includes("vr") ||
+      mp.includes("va") ||
+      mp.includes("sodexo") ||
+      mp.includes("ticket") ||
+      mp.includes("alelo") ||
+      mp.includes("ben")
+    ) {
+      eyeTotals.voucher += valCents;
     } else {
       eyeTotals.outros += valCents;
     }
@@ -676,42 +760,114 @@ export async function processFechamentoGrupoTurn(params: {
     eyeTotals[k] = Math.round(eyeTotals[k]) / 100;
   }
 
-  const envelopeTotalNum = Number(parsed.envelopeTotal.total || 0);
+  const salesCount = distinctSales.size > 0 ? distinctSales.size : (daySales || []).length;
+
+  // Procura fechamento existente pendente de conferência para mesma data e workspace (Gate 3 - Multi-turn / Multi-foto)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let existingRecord: any = null;
+  try {
+    const { data: found } = await params.supabase
+      .from("fechamentos_caixa")
+      .select("*")
+      .eq("workspace_id", params.workspaceId)
+      .eq("data_fechamento", parsed.dataFechamento)
+      .eq("status", "pendente_conferencia")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    existingRecord = found;
+  } catch (findErr) {
+    console.warn("[group-governance] Falha ao consultar fechamentos_caixa pendente:", findErr);
+  }
+
+  const mergedC1 = { ...(existingRecord?.caixa1 || {}), ...(parsed.caixa1 || {}) };
+  const mergedC2 = { ...(existingRecord?.caixa2 || {}), ...(parsed.caixa2 || {}) };
+
+  const getCombinedVal = (key: string) => {
+    const fromTurnos = Number(mergedC1[key] || 0) + Number(mergedC2[key] || 0);
+    if (fromTurnos > 0) return fromTurnos;
+    const fromParsed = Number(parsed.envelopeTotal[key] || 0);
+    if (fromParsed > 0) return fromParsed;
+    return Number(existingRecord?.envelope_total?.[key] || 0);
+  };
+
+  const finalDinheiro = getCombinedVal("dinheiro");
+  const finalDebito = getCombinedVal("debito");
+  const finalCredito = getCombinedVal("credito");
+  const finalPix = getCombinedVal("pix");
+  const finalVoucher = getCombinedVal("voucher");
+  const finalTotalCalc =
+    Math.round((finalDinheiro + finalDebito + finalCredito + finalPix + finalVoucher) * 100) / 100;
+  const envelopeTotalNum =
+    finalTotalCalc > 0
+      ? finalTotalCalc
+      : Number(parsed.envelopeTotal.total || existingRecord?.envelope_total?.total || 0);
+
+  const mergedEnvelopeTotal = {
+    dinheiro: finalDinheiro,
+    debito: finalDebito,
+    credito: finalCredito,
+    pix: finalPix,
+    voucher: finalVoucher,
+    total: envelopeTotalNum,
+  };
+
   const diferencaTotal = Math.round((envelopeTotalNum - eyeTotals.total) * 100) / 100;
   const sobraFinal =
     parsed.sobraInformada !== null
       ? parsed.sobraInformada
-      : parsed.envelopeTotal.dinheiro > 0
-      ? Math.round((parsed.envelopeTotal.dinheiro - eyeTotals.dinheiro) * 100) / 100
+      : existingRecord?.sobra !== undefined && existingRecord?.sobra !== null
+      ? Number(existingRecord.sobra)
+      : Math.abs(diferencaTotal) <= 2
+      ? 0
       : diferencaTotal;
 
   let fechamentoId: string | undefined;
   try {
-    const { data: inserted } = await params.supabase
-      .from("fechamentos_caixa")
-      .insert({
-        user_id: params.userId,
-        workspace_id: params.workspaceId,
-        grupo_id: params.grupoId,
-        conversation_id: params.conversationId,
-        chat_id: params.chatId ? Number(params.chatId) : null,
-        data_fechamento: parsed.dataFechamento,
-        caixa1: parsed.caixa1,
-        caixa2: parsed.caixa2,
-        total: parsed.envelopeTotal,
-        envelope_total: parsed.envelopeTotal,
-        eyemobile_total: eyeTotals,
-        sobra: sobraFinal,
-        status: "pendente_conferencia",
-        anexo_path: params.attachmentPath ?? null,
-        observacao: parsed.observacao,
-      })
-      .select("id")
-      .single();
+    if (existingRecord?.id) {
+      await params.supabase
+        .from("fechamentos_caixa")
+        .update({
+          caixa1: mergedC1,
+          caixa2: mergedC2,
+          total: mergedEnvelopeTotal,
+          envelope_total: mergedEnvelopeTotal,
+          eyemobile_total: eyeTotals,
+          sobra: sobraFinal,
+          anexo_path: params.attachmentPath ?? existingRecord.anexo_path ?? null,
+          observacao: [existingRecord.observacao, parsed.observacao].filter(Boolean).join(" | "),
+        })
+        .eq("id", existingRecord.id)
+        .select("id")
+        .single();
+      fechamentoId = existingRecord.id;
+    } else {
+      const { data: inserted } = await params.supabase
+        .from("fechamentos_caixa")
+        .insert({
+          user_id: params.userId,
+          workspace_id: params.workspaceId,
+          grupo_id: params.grupoId,
+          conversation_id: params.conversationId,
+          chat_id: params.chatId ? Number(params.chatId) : null,
+          data_fechamento: parsed.dataFechamento,
+          caixa1: mergedC1,
+          caixa2: mergedC2,
+          total: mergedEnvelopeTotal,
+          envelope_total: mergedEnvelopeTotal,
+          eyemobile_total: eyeTotals,
+          sobra: sobraFinal,
+          status: "pendente_conferencia",
+          anexo_path: params.attachmentPath ?? null,
+          observacao: parsed.observacao,
+        })
+        .select("id")
+        .single();
 
-    fechamentoId = inserted?.id;
+      fechamentoId = inserted?.id;
+    }
   } catch (err) {
-    console.warn("[group-governance] Falha ao gravar fechamentos_caixa:", err);
+    console.warn("[group-governance] Falha ao persistir fechamentos_caixa:", err);
   }
 
   let createdProposal: ActionProposal | undefined;
@@ -744,30 +900,32 @@ export async function processFechamentoGrupoTurn(params: {
     }
   }
 
-  const fmt = (v: number) =>
-    v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-  const dateBr = parsed.dataFechamento.split("-").reverse().join("/");
+  const fmt = (v: number) => {
+    const formatted = v.toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
+    return formatted.replace(/\u00A0/g, " ");
+  };
+  const dateParts = parsed.dataFechamento.split("-");
+  const dateBr = `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}`;
 
-  const diffLabel =
-    Math.abs(sobraFinal) <= 2
-      ? "✅ Dentro da tolerância"
-      : sobraFinal > 0
-      ? `📈 Sobra apurada: ${fmt(sobraFinal)}`
-      : `⚠️ Falta / divergência: ${fmt(sobraFinal)}`;
+  let statusText = "Conferido";
+  if (parsed.extractionSource === "partial" || envelopeTotalNum === 0) {
+    statusText = "Aguardando documentos";
+  } else if (Math.abs(diferencaTotal) > 2) {
+    statusText = "Divergente";
+  }
 
   const lines = [
-    `🧾 **Conferência de Fechamento — ${dateBr}**`,
-    ``,
-    `📦 **Informado / Envelope:** ${fmt(envelopeTotalNum)}`,
-    `• Dinheiro: ${fmt(parsed.envelopeTotal.dinheiro || 0)} | Pix: ${fmt(parsed.envelopeTotal.pix || 0)}`,
-    `• Débito: ${fmt(parsed.envelopeTotal.debito || 0)} | Crédito: ${fmt(parsed.envelopeTotal.credito || 0)}`,
-    ``,
-    `🖥️ **Sistema (Eyemobile / Vendas do dia):** ${fmt(eyeTotals.total)} (${(daySales || []).length} vendas)`,
-    `• Dinheiro: ${fmt(eyeTotals.dinheiro)} | Pix: ${fmt(eyeTotals.pix)}`,
-    `• Débito: ${fmt(eyeTotals.debito)} | Crédito: ${fmt(eyeTotals.credito)}`,
-    ``,
-    `📊 **Resultado:** ${diffLabel}`,
-    `⏳ **Status:** Pendente de conferência — confirme abaixo para homologar este fechamento.`,
+    `🧾 FECHAMENTO — RODO POINT`,
+    `📅 Data: ${dateBr}`,
+    `💵 Dinheiro: ${fmt(finalDinheiro)}`,
+    `💳 Débito: ${fmt(finalDebito)}`,
+    `💳 Crédito: ${fmt(finalCredito)}`,
+    `📲 Pix: ${fmt(finalPix)}`,
+    `🎫 Voucher: ${fmt(finalVoucher)}`,
+    `💰 Total: ${fmt(envelopeTotalNum)}`,
+    `📊 Sobra/Falta: ${fmt(sobraFinal)}`,
+    `Status: ${statusText}`,
+    `🖥️ Eyemobile: ${fmt(eyeTotals.total)} (${salesCount} vendas apuradas)`,
   ];
 
   return {

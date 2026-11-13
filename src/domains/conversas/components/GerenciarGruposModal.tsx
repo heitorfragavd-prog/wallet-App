@@ -1,8 +1,12 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
+  Bot,
   Check,
+  HelpCircle,
   Lock,
   Plus,
+  Radio,
+  Send,
   ShieldAlert,
   Trash2,
   UserPlus,
@@ -28,6 +32,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/shared/components/ui/select";
+import { useToast } from "@/shared/hooks/use-toast";
+import { supabase } from "@/integrations/supabase/client";
 import {
   GROUP_TYPE_META,
   type GroupPermissions,
@@ -112,6 +118,44 @@ export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
     ROLE_PERMISSION_PRESETS.operador,
   );
   const [savingParticipant, setSavingParticipant] = useState(false);
+  const { toast } = useToast();
+  const [testingTelegram, setTestingTelegram] = useState(false);
+  const [showTelegramGuide, setShowTelegramGuide] = useState(false);
+
+  const handleTestTelegramConnection = async () => {
+    if (!chatId.trim()) {
+      toast({
+        title: "Telegram Chat ID obrigatório",
+        description: "Informe o Chat ID numérico do grupo (ex: -100...) para testar.",
+        variant: "destructive",
+      });
+      return;
+    }
+    setTestingTelegram(true);
+    try {
+      const { data, error } = await supabase.functions.invoke("wallet-ai-orchestrator", {
+        body: {
+          action: "test_telegram_group",
+          chat_id: chatId.trim(),
+          nome_grupo: nomeGrupo || "Grupo de Teste",
+        },
+      });
+      if (error) throw error;
+      toast({
+        title: "Conexão Testada com Sucesso!",
+        description: data?.message || "Mensagem de teste determinística enviada ao grupo do Telegram.",
+      });
+    } catch (err: unknown) {
+      console.warn("Falha ao testar conexão Telegram:", err);
+      toast({
+        title: "Falha no teste",
+        description: "Não foi possível enviar a mensagem ao Telegram. Verifique se o bot @Wallet foi adicionado ao grupo como administrador.",
+        variant: "destructive",
+      });
+    } finally {
+      setTestingTelegram(false);
+    }
+  };
 
   useEffect(() => {
     if (!open) return;
@@ -342,24 +386,86 @@ export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
-                <div className="space-y-1.5">
-                  <Label htmlFor="grupo-chat-id" className="text-xs">
-                    Telegram Chat ID (opcional)
-                  </Label>
-                  <Input
-                    id="grupo-chat-id"
-                    value={chatId}
-                    onChange={(e) => setChatId(e.target.value)}
-                    placeholder="Ex: -1001234567890"
-                    className="h-9 text-xs font-mono"
-                  />
+              <div className="space-y-2">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
+                  <div className="space-y-1.5">
+                    <div className="flex items-center justify-between">
+                      <Label htmlFor="grupo-chat-id" className="text-xs">
+                        Telegram Chat ID
+                      </Label>
+                      <button
+                        type="button"
+                        onClick={() => setShowTelegramGuide((prev) => !prev)}
+                        className="text-[10px] text-primary hover:underline flex items-center gap-1"
+                      >
+                        <HelpCircle className="w-3 h-3" />
+                        Como conectar?
+                      </button>
+                    </div>
+                    <div className="flex gap-2">
+                      <Input
+                        id="grupo-chat-id"
+                        value={chatId}
+                        onChange={(e) => setChatId(e.target.value)}
+                        placeholder="Ex: -1001234567890"
+                        className="h-9 text-xs font-mono"
+                      />
+                      {chatId.trim() && (
+                        <Button
+                          type="button"
+                          size="sm"
+                          variant="secondary"
+                          onClick={() => void handleTestTelegramConnection()}
+                          disabled={testingTelegram}
+                          className="h-9 px-2.5 text-xs shrink-0 gap-1.5"
+                          title="Enviar mensagem de teste determinística ao grupo no Telegram"
+                        >
+                          <Send className="w-3 h-3" />
+                          {testingTelegram ? "Enviando..." : "Testar"}
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 h-9">
+                    <span className="text-xs font-medium">Grupo Ativo</span>
+                    <Switch checked={ativo} onCheckedChange={setAtivo} />
+                  </div>
                 </div>
 
-                <div className="flex items-center justify-between rounded-lg border border-border/60 px-3 h-9">
-                  <span className="text-xs font-medium">Grupo Ativo</span>
-                  <Switch checked={ativo} onCheckedChange={setAtivo} />
+                {/* Status de Conexão com Telegram */}
+                <div className="flex items-center justify-between px-1 text-[11px]">
+                  <div className="flex items-center gap-2">
+                    <span className="text-muted-foreground">Status do Vínculo:</span>
+                    {chatId.trim() ? (
+                      <Badge variant="outline" className="text-[10px] bg-emerald-500/10 text-emerald-400 border-emerald-500/30 gap-1">
+                        <Radio className="w-2.5 h-2.5 text-emerald-400 animate-pulse" />
+                        Conectado ao Telegram
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline" className="text-[10px] bg-amber-500/10 text-amber-400 border-amber-500/30 gap-1">
+                        <Bot className="w-2.5 h-2.5 text-amber-400" />
+                        Somente Web (Sem Chat ID)
+                      </Badge>
+                    )}
+                  </div>
                 </div>
+
+                {/* Guia / Wizard de Conexão */}
+                {showTelegramGuide && (
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-3 text-xs space-y-1.5 text-foreground/90">
+                    <p className="font-semibold text-primary flex items-center gap-1.5">
+                      <Bot className="w-3.5 h-3.5" />
+                      Assistente de Conexão Telegram (Bot Único)
+                    </p>
+                    <ol className="list-decimal list-inside space-y-1 text-[11px] text-muted-foreground">
+                      <li>Crie ou abra o grupo desejado no Telegram da empresa.</li>
+                      <li>Adicione o bot oficial do Wallet como <strong>Administrador</strong> do grupo com permissão para ler e enviar mensagens.</li>
+                      <li>Envie o comando <code className="bg-muted px-1 rounded text-foreground">/chatid</code> no grupo para obter o identificador numérico (ex: <code className="bg-muted px-1 rounded text-foreground">-1002345678901</code>).</li>
+                      <li>Cole o ID no campo <strong>Telegram Chat ID</strong> acima e clique em <strong>Testar</strong>.</li>
+                    </ol>
+                  </div>
+                )}
               </div>
 
               <div className="space-y-1.5">
