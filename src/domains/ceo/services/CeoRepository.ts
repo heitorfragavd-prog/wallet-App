@@ -391,4 +391,53 @@ export class CeoRepository {
       currentStatus: options?.currentStatus,
     });
   }
+
+  /**
+   * Consulta vendas reais do período do experimento para cálculo do impacto e KPIs
+   */
+  static async fetchSalesForExperiment(
+    workspaceId: string,
+    startDate: string,
+    endDate?: string | null
+  ): Promise<Array<{
+    valor: number;
+    data: string;
+    status?: string;
+    cancelada?: boolean;
+    tipo?: string;
+    itens?: Array<{
+      nome?: string;
+      produto_id?: string;
+      quantidade: number;
+      valor_unitario?: number;
+      custo_unitario?: number;
+    }>;
+  }>> {
+    if (!workspaceId || !startDate) return [];
+
+    try {
+      let query = supabase
+        .from('transacoes')
+        .select('id, valor, data, status, cancelada, tipo, descricao')
+        .eq('workspace_id', workspaceId)
+        .gte('data', startDate);
+
+      if (endDate) {
+        query = query.lte('data', endDate);
+      }
+
+      const { data, error } = await query;
+      if (error || !data) return [];
+
+      return data.map((t: Record<string, unknown>) => ({
+        valor: Number(t.valor || 0),
+        data: String(t.data || startDate),
+        status: String(t.status || 'concluida'),
+        cancelada: Boolean(t.cancelada),
+        tipo: String(t.tipo || 'receita'),
+      }));
+    } catch {
+      return [];
+    }
+  }
 }

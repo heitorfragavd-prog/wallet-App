@@ -253,6 +253,58 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
     }
   };
 
+  // Abertura do modal de conclusão com pré-medição inteligente
+  const handleOpenConcludeModal = async (exp: CommercialExperiment) => {
+    setConcludeModalExp(exp);
+
+    let salesData = kpis?.dailySales30Days?.map((d) => ({ valor: d.valor, data: d.date })) || [];
+
+    // Busca vendas do período caso CeoRepository retorne dados mais detalhados
+    try {
+      const fetched = await CeoRepository.fetchSalesForExperiment(workspaceId, exp.start_date);
+      if (fetched && fetched.length > 0) {
+        salesData = fetched;
+      }
+    } catch {
+      // Mantém dailySales30Days como fallback seguro
+    }
+
+    const baseNum =
+      typeof exp.baseline_value === 'number'
+        ? exp.baseline_value
+        : parseFloat(String(exp.baseline_value || '').replace(/[^0-9,-]/g, '').replace(',', '.')) || 0;
+
+    const measurement = CeoIntelligenceEngine.measureExperimentFromSales({
+      experiment: exp,
+      sales: salesData,
+      baselineDailyAverage: baseNum,
+      baselinePeriod: exp.baseline_details?.period || 'Período anterior',
+    });
+
+    const formattedVal = measurement.measurement.currentValue.toLocaleString('pt-BR', {
+      minimumFractionDigits: 2,
+    });
+    const deltaStr =
+      measurement.delta.percent !== null
+        ? ` (${measurement.delta.percent >= 0 ? '+' : ''}${measurement.delta.percent}%)`
+        : '';
+
+    setConcludeFinalValue(exp.current_value ? String(exp.current_value) : `R$ ${formattedVal}${deltaStr}`);
+    setConcludeImpact(String(measurement.financialImpact || 0));
+
+    if (measurement.classification === 'favoravel') {
+      setConcludeDecision('manter');
+    } else if (measurement.classification === 'desfavoravel') {
+      setConcludeDecision('interromper');
+    } else {
+      setConcludeDecision('ajustar');
+    }
+
+    setConcludeRationale(
+      measurement.notes || 'Conclusão registrada com base na medição automática do período.'
+    );
+  };
+
   // Transição 4: Concluir experimento (Status: 'em_andamento' -> 'concluido')
   const handleConfirmConclude = async () => {
     if (!concludeModalExp) return;
@@ -595,55 +647,87 @@ export const CeoOpportunitiesTab: React.FC<CeoOpportunitiesTabProps> = ({
       {activeSubTab === 'em_execucao' && (
         <div className="space-y-4">
           {activeExperiments.length > 0 ? (
-            activeExperiments.map((exp) => (
-              <Card key={exp.id} className="bg-card/70 border-border/50 hover:border-emerald-500/30 transition-colors">
-                <CardContent className="p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                  <div className="space-y-2 flex-1">
-                    <div className="flex items-center gap-2">
-                      <span className="font-semibold text-foreground text-sm">{exp.title || exp.name}</span>
-                      <Badge className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px]">
-                        Em Andamento
-                      </Badge>
-                    </div>
-                    <p className="text-xs text-muted-foreground max-w-2xl">{exp.hypothesis}</p>
-                    <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 pt-1">
-                      <span><strong className="text-slate-300">Baseline inicial:</strong> {exp.baseline_value || 'Não informado'}</span>
-                      <span><strong className="text-slate-300">Valor atual:</strong> <span className="text-emerald-400 font-medium">{exp.current_value || 'Em medição'}</span></span>
-                      <span><strong className="text-slate-300">Meta:</strong> {exp.target_value || 'A definir'}</span>
-                      <span className="flex items-center gap-1"><Clock className="w-3 h-3 text-slate-500" /> Início: {exp.start_date}</span>
-                    </div>
-                  </div>
+            activeExperiments.map((exp) => {
+              const baseNum =
+                typeof exp.baseline_value === 'number'
+                  ? exp.baseline_value
+                  : parseFloat(String(exp.baseline_value || '').replace(/[^0-9,-]/g, '').replace(',', '.')) || 0;
 
-                  <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 w-full sm:w-auto justify-end">
-                    <Button
-                      size="sm"
-                      onClick={() => {
-                        setConcludeModalExp(exp);
-                        setConcludeFinalValue(String(exp.current_value || ''));
-                        setConcludeImpact(exp.measured_financial_impact ? String(exp.measured_financial_impact) : '');
-                        setConcludeDecision('manter');
-                      }}
-                      disabled={!isOwnerOrExecutive}
-                      title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode concluir experimentos' : 'Concluir e avaliar experimento'}
-                      className="h-8 text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold gap-1 disabled:opacity-50"
-                    >
-                      <CheckCircle2 className="w-3.5 h-3.5" />
-                      Concluir / Avaliar
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => handleCancelExperiment(exp)}
-                      disabled={!isOwnerOrExecutive}
-                      title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode interromper experimentos' : 'Interromper experimento'}
-                      className="h-8 text-xs text-red-400 hover:bg-red-950/20 disabled:opacity-50"
-                    >
-                      Interromper
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))
+              const liveMeasurement = CeoIntelligenceEngine.measureExperimentFromSales({
+                experiment: exp,
+                sales: kpis?.dailySales30Days?.map((d) => ({ valor: d.valor, data: d.date })) || [],
+                baselineDailyAverage: baseNum,
+                baselinePeriod: exp.baseline_details?.period || 'Período anterior',
+              });
+
+              return (
+                <Card key={exp.id} className="bg-card/70 border-border/50 hover:border-emerald-500/30 transition-colors">
+                  <CardContent className="p-5 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+                    <div className="space-y-2 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <span className="font-semibold text-foreground text-sm">{exp.title || exp.name}</span>
+                        <Badge className="bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 text-[10px]">
+                          Em Andamento
+                        </Badge>
+                        {liveMeasurement.classification === 'favoravel' && (
+                          <Badge className="bg-emerald-500/10 text-emerald-300 border border-emerald-500/20 text-[10px] gap-1">
+                            <TrendingUp className="w-3 h-3" />
+                            Tendência Favorável (+R$ {liveMeasurement.financialImpact.toFixed(2)})
+                          </Badge>
+                        )}
+                        {liveMeasurement.classification === 'desfavoravel' && (
+                          <Badge className="bg-rose-500/10 text-rose-300 border border-rose-500/20 text-[10px] gap-1">
+                            Tendência Desfavorável
+                          </Badge>
+                        )}
+                        {liveMeasurement.classification === 'inconcluso' && (
+                          <Badge className="bg-amber-500/10 text-amber-300 border border-amber-500/20 text-[10px]">
+                            Amostra Preliminar
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground max-w-2xl">{exp.hypothesis}</p>
+                      <div className="grid grid-cols-2 sm:flex sm:flex-wrap items-center gap-x-4 gap-y-1 text-xs text-slate-400 pt-1">
+                        <span><strong className="text-slate-300">Baseline inicial:</strong> {exp.baseline_value || 'Não informado'}</span>
+                        <span>
+                          <strong className="text-slate-300">Medição atual:</strong>{' '}
+                          <span className="text-emerald-400 font-medium">
+                            {liveMeasurement.sampleSize > 0
+                              ? `R$ ${liveMeasurement.measurement.currentValue.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}${liveMeasurement.delta.percent !== null ? ` (${liveMeasurement.delta.percent >= 0 ? '+' : ''}${liveMeasurement.delta.percent}%)` : ''}`
+                              : (exp.current_value || 'Em apuração')}
+                          </span>
+                        </span>
+                        <span><strong className="text-slate-300">Meta:</strong> {exp.target_value || 'A definir'}</span>
+                        <span className="flex items-center gap-1"><Clock className="w-3 h-3 text-slate-500" /> Início: {exp.start_date}</span>
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0 border-t sm:border-t-0 pt-3 sm:pt-0 w-full sm:w-auto justify-end">
+                      <Button
+                        size="sm"
+                        onClick={() => handleOpenConcludeModal(exp)}
+                        disabled={!isOwnerOrExecutive}
+                        title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode concluir experimentos' : 'Concluir e avaliar experimento'}
+                        className="h-8 text-xs bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold gap-1 disabled:opacity-50"
+                      >
+                        <CheckCircle2 className="w-3.5 h-3.5" />
+                        Concluir / Avaliar
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => handleCancelExperiment(exp)}
+                        disabled={!isOwnerOrExecutive}
+                        title={!isOwnerOrExecutive ? 'Apenas o proprietário ou administrador pode interromper experimentos' : 'Interromper experimento'}
+                        className="h-8 text-xs text-red-400 hover:bg-red-950/20 disabled:opacity-50"
+                      >
+                        Interromper
+                      </Button>
+                    </div>
+                  </CardContent>
+                </Card>
+              );
+            })
           ) : (
             <div className="p-8 text-center text-xs text-muted-foreground border border-dashed border-border/50 rounded-xl">
               Nenhum experimento em execução no momento. Inicie um experimento aprovado na aba &quot;Experimentos&quot;.
