@@ -286,7 +286,7 @@ export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
               className="text-xs h-8 gap-1.5"
             >
               <Check className="w-3.5 h-3.5" />
-              {provisioning ? "Provisionando..." : "Provisionar 4 Grupos Padrão"}
+              {provisioning ? "Provisionando..." : "Provisionar 5 Grupos Padrão"}
             </Button>
           </DialogTitle>
           <DialogDescription className="text-xs">

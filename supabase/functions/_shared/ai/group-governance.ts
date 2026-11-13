@@ -8,7 +8,8 @@ export type OperationalGroupType =
   | "fechamento"
   | "nfe_boletos"
   | "contas_empresa"
-  | "conversas_loja";
+  | "conversas_loja"
+  | "folguistas";
 
 export interface GroupPermissions {
   ler: boolean;
@@ -109,6 +110,22 @@ export const STANDARD_GROUP_TEMPLATES: Record<OperationalGroupType, StandardGrou
     ],
     restritoAdmins: false,
   },
+  folguistas: {
+    tipo_grupo: "folguistas",
+    nome_grupo: "Folguistas Rodo Point",
+    descricao:
+      "Gestão inteligente de escalas, confirmação de disponibilidades, regras de turnos e folgas e recebimento de fechamento de caixa para espelhamento seguro no grupo principal.",
+    ferramentas_permitidas: ["consultar_rotinas"],
+    dados_permitidos: ["escalas", "folguistas", "disponibilidade", "turnos", "fechamento"],
+    acoes_permitidas: ["confirmar_disponibilidade", "extrair_fechamento", "registrar_recado"],
+    funcionalidades_autorizadas: [
+      "gestao_escalas",
+      "consulta_folguistas",
+      "confirmacao_disponibilidade",
+      "recebimento_fechamento",
+    ],
+    restritoAdmins: false,
+  },
 };
 
 export const CEO_EXCLUSIVE_TOOL_NAMES = new Set([
@@ -131,8 +148,17 @@ export const SENSITIVE_COMPANY_FINANCIAL_TOOLS = new Set([
 
 export function normalizeOperationalGroupType(raw?: string | null): OperationalGroupType {
   const val = (raw || "").trim().toLowerCase();
-  if (val === "fechamento" || val === "nfe_boletos" || val === "contas_empresa" || val === "conversas_loja") {
+  if (
+    val === "fechamento" ||
+    val === "nfe_boletos" ||
+    val === "contas_empresa" ||
+    val === "conversas_loja" ||
+    val === "folguistas"
+  ) {
     return val;
+  }
+  if (val.includes("folguista") || val.includes("folga") || val.includes("escala")) {
+    return "folguistas";
   }
   if (val.includes("boleto") || val.includes("nota") || val.includes("nfe") || val.includes("danfe")) {
     return "nfe_boletos";
@@ -182,6 +208,7 @@ export function filterCatalogForGroup(
       "buscar_vendas_pdv",
     ]),
     conversas_loja: new Set<string>(),
+    folguistas: new Set<string>(["consultar_rotinas"]),
   };
 
   const allowedSet = allowedByGroupType[groupType];
@@ -193,7 +220,10 @@ export function filterCatalogForGroup(
   for (const [toolName, handler] of Object.entries(catalog)) {
     if (CEO_EXCLUSIVE_TOOL_NAMES.has(toolName)) continue;
 
-    if (groupType === "conversas_loja" && SENSITIVE_COMPANY_FINANCIAL_TOOLS.has(toolName)) {
+    if (
+      (groupType === "conversas_loja" || groupType === "folguistas") &&
+      SENSITIVE_COMPANY_FINANCIAL_TOOLS.has(toolName)
+    ) {
       continue;
     }
 
@@ -238,6 +268,8 @@ export function buildGroupSystemPrompt(
       return `${basePrompt}\n\n[CONTEXTO DE GRUPO OPERACIONAL: ${label} (CONTAS DA EMPRESA — ADMINISTRAÇÃO)]\nEspecialidade: acompanhamento gerencial de dívidas, pagamentos, Pix Divipay, fornecedores, despesas, saldos e conciliações operacionais.\nNota: o cérebro estratégico privado (Wallet CEO) permanece inacessível em grupos; alterações críticas exigem confirmação explícita.`;
     case "conversas_loja":
       return `${basePrompt}\n\n[CONTEXTO DE GRUPO OPERACIONAL: ${label} (CONVERSAS DA LOJA)]\nEspecialidade: rotina operacional da loja, recados entre turnos, tarefas, procedimentos internos e registro de ocorrências.\nSIGILO OBRIGATÓRIO: este grupo inclui equipe operacional. É PROIBIDO divulgar saldos bancários da empresa, lucro, DRE, faturamento consolidado, dívidas corporativas ou pagamentos confidenciais a fornecedores. Se alguém pedir dados financeiros confidenciais, recuse educadamente.`;
+    case "folguistas":
+      return `${basePrompt}\n\n[CONTEXTO DE GRUPO OPERACIONAL: ${label} (FOLGUISTAS RODO POINT & ESCALAS)]\nEspecialidade: organização e consulta de escalas, turnos de fim de semana, disponibilidade de folguistas e recebimento de fechamentos de caixa para conferência.\nSIGILO OBRIGATÓRIO: este grupo é composto por folguistas e equipe de apoio. É TERMINANTEMENTE PROIBIDO expor dados financeiros estratégicos da empresa (lucro líquido, DRE, margens, faturamento global, saldos de contas correntes, dívidas bancárias ou despesas confidenciais). Se receber fechamento de caixa, processe o resumo operacional e confirme o registro para conferência da administração.`;
   }
 }
 
