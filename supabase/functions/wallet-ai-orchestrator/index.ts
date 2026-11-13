@@ -25,8 +25,8 @@ import {
 console.log("[wallet-ai-orchestrator] Worker script loading...");
 
 const supabaseUrl =
-  Deno.env.get("API_URL") ||
   Deno.env.get("SUPABASE_URL") ||
+  Deno.env.get("API_URL") ||
   Deno.env.get("API_EXTERNAL_URL") ||
   "http://127.0.0.1:54321";
 const serviceRoleKey = getSupabaseSecretKey();

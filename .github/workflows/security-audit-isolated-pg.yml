@@ -183,13 +183,12 @@ jobs:
             DOCKER_GW="172.17.0.1"
           fi
           echo "Docker gateway IP detectado para Edge Functions: $DOCKER_GW"
-          echo "SERVICE_ROLE_KEY=$SERVICE_KEY" > .env.functions.test
-          echo "SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY" >> .env.functions.test
-          echo "SECRET_KEY=$SERVICE_KEY" >> .env.functions.test
-          echo "SUPABASE_URL=http://127.0.0.1:54321" >> .env.functions.test
-          echo "API_URL=http://127.0.0.1:54321" >> .env.functions.test
-          echo "OPENAI_BASE_URL=http://${DOCKER_GW}:18080/v1" >> .env.functions.test
-          echo "OPENAI_API_KEY=mock-openai-key-for-test" >> .env.functions.test
+          cat << EOF > .env.functions.test
+          SUPABASE_URL=http://localhost:54321
+          SUPABASE_SERVICE_ROLE_KEY=$SERVICE_KEY
+          OPENAI_BASE_URL=http://${DOCKER_GW}:18080/v1
+          OPENAI_API_KEY=mock-openai-key-for-test
+          EOF
 
           # Inicia Edge Functions no runtime compatível local
           supabase functions serve --env-file .env.functions.test --no-verify-jwt > /tmp/functions.log 2>&1 &
