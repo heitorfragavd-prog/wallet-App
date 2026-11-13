@@ -84,8 +84,11 @@ export interface StructuredBaseline {
   notes?: string;
 }
 
+export type ExperimentKpiType = 'ticket_medio' | 'faturamento' | 'pedidos' | 'produto_vendido' | 'margem';
+
 export interface AutomatedExperimentMeasurement {
   experimentId: string;
+  kpiType?: ExperimentKpiType;
   baseline: {
     indicator: string;
     value: number;
