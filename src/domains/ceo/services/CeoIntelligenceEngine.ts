@@ -725,6 +725,7 @@ export class CeoIntelligenceEngine {
     let deltaAbs = 0;
     let deltaPercent: number | null = null;
     let financialImpact = 0;
+    let hasAnyCostReported = true;
 
     switch (resolvedKpiType) {
       case 'ticket_medio': {
@@ -793,22 +794,40 @@ export class CeoIntelligenceEngine {
 
       case 'margem': {
         indicatorName = experiment.target_kpi || 'Margem Operacional (%)';
-        const totalCost = validSales.reduce((acc, s) => {
-          if (s.custo != null && Number.isFinite(s.custo)) return acc + Number(s.custo);
-          if (s.itens && s.itens.length > 0) {
-            return (
-              acc +
-              s.itens.reduce(
-                (iacc, it) => iacc + Number(it.custo_unitario || 0) * Number(it.quantidade || 1),
-                0
-              )
-            );
-          }
-          return acc;
-        }, 0);
+        let revenueWithKnownCost = 0;
+        let totalCost = 0;
+        hasAnyCostReported = false;
 
-        const currentMarginPercent =
-          totalRevenue > 0 ? Math.round(((totalRevenue - totalCost) / totalRevenue) * 1000) / 10 : 0;
+        for (const s of validSales) {
+          if (s.custo != null && Number.isFinite(s.custo) && s.custo > 0) {
+            hasAnyCostReported = true;
+            revenueWithKnownCost += Number(s.valor || 0);
+            totalCost += Number(s.custo);
+          } else if (s.itens && s.itens.length > 0) {
+            let itemCostSum = 0;
+            let itemHasCost = false;
+            for (const it of s.itens) {
+              if (it.custo_unitario != null && Number.isFinite(it.custo_unitario) && it.custo_unitario > 0) {
+                itemHasCost = true;
+                itemCostSum += Number(it.custo_unitario) * Number(it.quantidade || 1);
+              }
+            }
+            if (itemHasCost) {
+              hasAnyCostReported = true;
+              revenueWithKnownCost += Number(s.valor || 0);
+              totalCost += itemCostSum;
+            }
+          }
+        }
+
+        // Se nenhuma venda possui custo cadastrado, não inventa margem nem trata custo como zero
+        let currentMarginPercent = 0;
+        if (!hasAnyCostReported || revenueWithKnownCost === 0) {
+          currentMarginPercent = 0;
+        } else {
+          currentMarginPercent =
+            Math.round(((revenueWithKnownCost - totalCost) / revenueWithKnownCost) * 1000) / 10;
+        }
 
         currentValue = currentMarginPercent;
         deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
@@ -842,6 +861,10 @@ export class CeoIntelligenceEngine {
     if (sampleSize === 0) {
       classification = 'dados_indisponiveis';
       notes = 'Nenhuma venda confirmada registrada no período do experimento.';
+    } else if (resolvedKpiType === 'margem' && !hasAnyCostReported) {
+      classification = 'dados_indisponiveis';
+      notes =
+        'Vendas identificadas no período, porém sem fichas técnicas ou custos de mercadorias confirmados. Margem não pode ser apurada com custo zero fictício.';
     } else if (!isStatisticallySufficient) {
       classification = 'inconcluso';
       notes = `Amostra preliminar (${sampleSize} vendas em ${calculatedDays} dias). Necessário maior período para relevância estatística.`;
