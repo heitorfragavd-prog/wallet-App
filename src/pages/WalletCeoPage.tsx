@@ -451,6 +451,7 @@ export const WalletCeoPage: React.FC = () => {
               experiments={experiments}
               kpis={executiveKpis}
               onExperimentCreated={loadRepositoryData}
+              onExperimentUpdated={loadRepositoryData}
             />
           </TabsContent>
 

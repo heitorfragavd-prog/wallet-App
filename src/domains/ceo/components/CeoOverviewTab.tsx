@@ -104,35 +104,24 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
       ) {
         const cmvConf = kpis.cmvConfirmado;
         const recConf = kpis.receitaComCustoConhecido;
-        const cob = kpis.coberturaCmvPercent;
+        const cob = kpis.coberturaCmvPercent ?? 0;
         const lucroConf = kpis.lucroBrutoConfirmado;
         const margemConf = kpis.margemBrutaConfirmadaPercent;
 
         let cmvInfo = '';
-        if (cmvConf !== null && cmvConf > 0) {
-          cmvInfo = `- **CMV Confirmado (Notas Fiscais):** **R$ ${cmvConf.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}` +
-            ` (${kpis.cmvPercent}% sobre R$ ${recConf.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo auditado)\n` +
-            `- **Lucro Bruto Comprovado:** **R$ ${lucroConf?.toLocaleString('pt-BR', { minimumFractionDigits: 2 }) || '0,00'}** (Margem Média de ${margemConf}%)\n` +
+        if (cmvConf !== null && cmvConf !== undefined && cmvConf > 0) {
+          cmvInfo = `- **CMV Confirmado (Notas Fiscais):** **R$ ${cmvConf.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**` +
+            ` (${kpis.cmvPercent ?? 0}% sobre R$ ${(recConf || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo auditado)\n` +
+            `- **Lucro Bruto Comprovado:** **R$ ${(lucroConf ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}** (Margem Média de ${margemConf ?? 0}%)\n` +
             `- **Cobertura de Custos:** ${cob}% do faturamento do mês auditado por notas fiscais.\n\n`;
+        } else {
+          cmvInfo = `- **CMV Auditado:** R$ 0,00 (aguardando vinculação de notas fiscais de entrada de mercadorias).\n` +
+            `- **Cobertura:** ${cob}% do faturamento coberto por NF no período.\n\n`;
         }
 
         return `🛒 **Custos de Atacado & CMV Comprovado (Rodo Point):**\n\n` +
           cmvInfo +
-          `📋 **Preços de Custo Unitários Auditados (NF SPAL e Brasnorte):**\n` +
-          `  • **Coca KS**: Custo Histórico Auditado **R$ 1,7017** (NF SPAL) | Cotação Recente Atacado **R$ 2,54** (Caixa R$ 60,96 c/ 24) | Venda R$ 7,00 | **Margem Histórica 75,7% (Margem Cotada 63,7%)**\n` +
-          `  • **Refrigerante 350ml**: Custo R$ 1,83 | Venda R$ 7,00 | **Margem 73,9%** (SPAL)\n` +
-          `  • **Refrigerante 200ml**: Custo R$ 1,34 | Venda R$ 4,00 | **Margem 66,5%** (SPAL)\n` +
-          `  • **Kapo**: Custo R$ 1,64 | Venda R$ 4,50 | **Margem 63,6%** (SPAL)\n` +
-          `  • **Skol 473ml**: Custo R$ 3,97 | Venda R$ 10,00 | **Margem 60,3%** (Brasnorte)\n` +
-          `  • **Brahma**: Custo R$ 4,31 | Venda R$ 10,00 | **Margem 56,9%** (Brasnorte)\n` +
-          `  • **Suco Del Valle**: Custo R$ 2,86 | Venda R$ 6,00 | **Margem 52,3%** (SPAL)\n` +
-          `  • **Monster Energy LT 473ml**: Custo R$ 7,21 | Venda R$ 14,90 | **Margem 51,6%** (SPAL)\n` +
-          `  • **Gatorade**: Custo R$ 4,52 | Venda R$ 8,90 | **Margem 49,3%** (Brasnorte)\n` +
-          `  • **Original (Cerveja)**: Custo R$ 5,08 | Venda R$ 10,00 | **Margem 49,2%** (Brasnorte)\n` +
-          `  • **H2OH Limoneto**: Custo R$ 4,15 | Venda R$ 7,90 | **Margem 47,5%** (Brasnorte)\n` +
-          `  • **Red Bull 250ml**: Custo R$ 8,13 | Venda R$ 14,90 | **Margem 45,5%** (Brasnorte)\n` +
-          `  • **Corona**: Custo R$ 6,77 | Venda R$ 12,00 | **Margem 43,6%** (Brasnorte)\n\n` +
-          `> 💡 *Salgados (Gerson) e Pão de Queijo: aguardam custo unitário e ficha técnica para atingir 100% de cobertura.* `;
+          `> 💡 Os custos unitários e CMV são calculados exclusivamente com base em notas fiscais de compra e fichas técnicas cadastradas.`;
       }
 
       // 0.1 Pergunta sobre produtos mais lucrativos ou maiores margens
@@ -145,13 +134,20 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         p.includes('lucro por produto') ||
         p.includes('lucro dos produtos')
       ) {
-        return `💰 **Ranking de Lucratividade dos Produtos (Custos Comprovados):**\n\n` +
-          `🥇 **Refrigerante 350ml**: Lucro de **R$ 5,17/un** (Faturamento R$ 5,4k | Lucro total: R$ 4.008,37 | **Margem 73,9%**)\n` +
-          `🥈 **Refrigerante 200ml**: Lucro de **R$ 2,66/un** (Faturamento R$ 4,2k | Lucro total: R$ 2.806,55 | **Margem 66,5%**)\n` +
-          `🥉 **Coca KS**: Lucro de **R$ 5,30/un** (Faturamento R$ 1,7k | Lucro total: R$ 1.285,39 | **Margem 75,7%**)\n` +
-          `4️⃣ **Monster Energy 473ml**: Lucro de **R$ 7,69/un** (Faturamento R$ 2,4k | Lucro total: R$ 1.252,30 | **Margem 51,6%**)\n` +
-          `5️⃣ **Brahma**: Lucro de **R$ 5,69/un** (Faturamento R$ 1,7k | Lucro total: R$ 983,70 | **Margem 56,9%**)\n\n` +
-          `> 🏆 *A Coca KS tem a maior margem percentual unitária (75,7%), enquanto o Refrigerante 350ml gera o maior lucro em volume bruto.* `;
+        const prods = kpis.topProducts || [];
+        if (prods.length > 0) {
+          const prodsText = prods
+            .slice(0, 5)
+            .map(
+              (pr) =>
+                `• **${pr.produto}**: ${pr.quantidade} un — Faturamento R$ ${pr.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${pr.percentualFaturamento}% do total)`
+            )
+            .join('\n');
+          return `💰 **Principais Produtos em Faturamento e Rentabilidade (PDV Rodo Point):**\n\n` +
+            `${prodsText}\n\n` +
+            `> 💡 Apurado diretamente a partir do histórico de vendas do PDV Eyemobile. A margem individual por item reflete as fichas técnicas cadastradas em Estoque.`;
+        }
+        return `💰 **Ranking de Lucratividade dos Produtos:**\n\nDados de vendas ou custos ainda insuficientes no período para gerar o ranking de margens.`;
       }
 
       // 1. Pergunta sobre produtos mais vendidos
@@ -205,23 +201,24 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
       ) {
         const fatMes = kpis.faturamentoMes || 0;
         const cob = kpis.coberturaCustosLucroPercent ?? kpis.coberturaCmvPercent ?? 0;
+        const resOperacional = kpis.resultadoOperacional || 0;
+        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
+        const despPagas = kpis.despesasPagas || 0;
+        const cmvFormatado = kpis.cmvConfirmado !== null && kpis.cmvConfirmado !== undefined
+          ? `R$ ${kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
+          : 'R$ 0,00 (pendente de NF)';
 
         return `💼 **Demonstrativo de Resultado & Rentabilidade (Rodo Point):**\n\n` +
-          `1️⃣ **Resultado Preliminar da Operação Realizada (01 a 06/11):**\n` +
-          `- **Vendas PDV Reconciliadas:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (353 pedidos nos dias 01 e 02/11)\n` +
-          `- **(-) CMV Auditado por NF:** R$ ${(kpis.cmvConfirmado || 191.50).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${cob}% de cobertura)\n` +
-          `- **(-) Despesas Operacionais Incorridas:** R$ 2.767,48 (pessoal e serviços dos primeiros dias)\n` +
-          `- **(-) Tarifas Bancárias:** R$ 52,50 (15 saques Divipay)\n` +
-          `- **(=) Saldo Operacional Preliminar:** **R$ +1.480,42** (antes do CMV de salgados/combos)\n\n` +
+          `1️⃣ **Resultado Operacional (Competência do Mês):**\n` +
+          `- **Vendas Brutas (PDV Reconciliadas):** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `- **(-) CMV Auditado por NF:** ${cmvFormatado} (${cob}% de cobertura)\n` +
+          `- **(-) Despesas Operacionais (Competência):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `- **(=) Resultado Operacional:** **R$ ${resOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}** (Margem: ${kpis.margemOperacional ?? 0}%)\n\n` +
           `2️⃣ **Visão de Fluxo de Caixa (Desembolsos Pagos no Período):**\n` +
           `- **Entradas Vendas:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **(-) Fornecedores / Boletos de Estoque Pagos:** R$ 15.929,67 (SPAL, Brasnorte, Gerson Salgados e boletos de mercadorias para revenda)\n` +
-          `- **(-) Pessoal / Serviços Pagos:** R$ 2.767,48\n` +
-          `- **(-) Tarifas Pagas:** R$ 52,50\n` +
-          `- **(=) Saldo de Caixa do Período:** R$ -14.257,75 (déficit de caixa temporário pela concentração de compras de estoque para o mês todo)\n\n` +
-          `3️⃣ **Obrigações Futuras Agendadas do Mês:**\n` +
-          `- **Total Agendado a Vencer:** R$ 11.289,49 (sendo R$ 10.000,00 de Pró-labores em 25/11 e R$ 937,49 de acertos de equipe em 09/11)\n\n` +
-          `> 💡 Para visualizar a segregação completa, acesse a aba **Análises → Resultado & Lucro Líquido**.`;
+          `- **Despesas Pagas no Caixa:** R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
+          `- **Saldo de Caixa (Vendas - Pagamentos):** R$ ${(kpis.diferencaVendasDespesasPagas ?? (fatMes - despPagas)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n` +
+          `> 💡 Dados apurados em tempo real diretamente das vendas do Eyemobile PDV e lançamentos contábeis.`;
       }
 
       // 4. Pergunta sobre vendas/faturamento de ontem
@@ -255,20 +252,21 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
       }
 
       // 6. Pergunta sobre despesas
-      if (p.includes('despesa') || p.includes('gasto') || p.includes('custo') || p.includes('gastamos')) {
-        return `💳 **Detalhamento das Despesas de Novembro (Rodo Point):**\n\n` +
-          `1️⃣ **Despesas Operacionais Incorridas no Período (01 a 06/11):** **R$ 2.767,48**\n` +
-          `  • Pessoal & Apoio: Rainá (R$ 620), Shuellen (R$ 1.269 adiantamento), Victor folguista (R$ 280), Luiz (R$ 180), Transporte/Passagem (R$ 317,49), Suprimento caixa (R$ 100,99)\n\n` +
-          `2️⃣ **Compras de Mercadorias para Revenda / Fornecedores Pagos (Fluxo de Caixa):** **R$ 15.929,67**\n` +
-          `  • Boletos bancários de atacado: R$ 13.264,67 (SPAL, Brasnorte, atacadistas de bebidas)\n` +
-          `  • Gerson Salgados: R$ 2.511,00 (compra de salgados para revenda)\n` +
-          `  • Biscoitos: R$ 154,00\n` +
-          `  *(Nota contábil: compras de estoque para revenda entram no CMV das vendas e não como despesa administrativa pura)*\n\n` +
-          `3️⃣ **Despesas Financeiras:** **R$ 52,50** (15 tarifas de saque Divipay a R$ 3,50)\n\n` +
-          `4️⃣ **Obrigações Futuras Agendadas do Mês:** **R$ 11.289,49**\n` +
-          `  • Pró-labores (25/11): R$ 10.000,00 (Heitor R$ 5k + Viviane R$ 5k)\n` +
-          `  • Acertos de Equipe (09/11): R$ 937,49\n` +
-          `  • Saldo de Salário Shuellen: R$ 352,00`;
+      if (p.includes('despesa') || p.includes('gasto') || p.includes('custo') || p.includes('gastamos') || p.includes('contas a pagar')) {
+        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
+        const despPagas = kpis.despesasPagas || 0;
+        const despPend = kpis.despesasPendentes || 0;
+        const varDesp = kpis.variacaoDespesasPercent;
+        const varDespTxt =
+          varDesp !== null && varDesp !== undefined
+            ? ` (${varDesp >= 0 ? '+' : ''}${varDesp}% vs mês anterior)`
+            : '';
+
+        return `💳 **Detalhamento das Despesas Deste Mês (Rodo Point):**\n\n` +
+          `1️⃣ **Despesas Totais por Competência (Mês Atual):** **R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**${varDespTxt}\n` +
+          `2️⃣ **Despesas Pagas (Fluxo de Caixa):** **R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**\n` +
+          `3️⃣ **Despesas Pendentes / A Pagar:** **R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**\n\n` +
+          `> 💡 Dados sincronizados a partir dos lançamentos e conciliações financeiras oficiais.`;
       }
 
       // Resumo executivo rápido

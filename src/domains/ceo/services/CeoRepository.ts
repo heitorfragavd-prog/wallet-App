@@ -140,6 +140,13 @@ export class CeoRepository {
         const targetMetrics = d.target_metrics as Record<string, unknown> | undefined;
         const observedResults = d.observed_results as Record<string, unknown> | undefined;
 
+        const resolvedBaseline =
+          d.baseline_value !== null && d.baseline_value !== undefined
+            ? String(d.baseline_value)
+            : targetMetrics?.baseline_value !== undefined && targetMetrics?.baseline_value !== null
+            ? String(targetMetrics.baseline_value)
+            : undefined;
+
         return {
           id: String(d.id),
           workspace_id: String(d.workspace_id),
@@ -149,10 +156,10 @@ export class CeoRepository {
           hypothesis: String(d.hypothesis || ''),
           department: (d.department as CommercialExperiment['department']) || 'commercial_growth',
           target_kpi: String(d.target_kpi || targetMetrics?.target_metric_name || 'Faturamento Incremental'),
-          baseline_value: String(d.baseline_value || targetMetrics?.baseline_value || '0'),
-          current_value: String(d.current_value || observedResults?.current_value || 'Em medição'),
-          target_value: String(d.target_value || targetMetrics?.expected_value || 'Meta'),
-          start_date: String(d.start_date || new Date().toISOString()),
+          baseline_value: resolvedBaseline,
+          current_value: d.current_value != null ? String(d.current_value) : (observedResults?.current_value != null ? String(observedResults.current_value) : undefined),
+          target_value: d.target_value != null ? String(d.target_value) : (targetMetrics?.expected_value != null ? String(targetMetrics.expected_value) : undefined),
+          start_date: String(d.start_date || new Date().toISOString().slice(0, 10)),
           end_date: d.end_date ? String(d.end_date) : undefined,
           responsible_person: String(d.responsible_person || 'Gestão Rodo Point'),
           target_metrics: d.target_metrics as CommercialExperiment['target_metrics'],
@@ -187,9 +194,9 @@ export class CeoRepository {
         hypothesis: exp.hypothesis,
         department: exp.department || 'commercial_growth',
         target_kpi: exp.target_kpi || 'Faturamento Incremental',
-        baseline_value: String(exp.baseline_value || '0'),
-        current_value: String(exp.current_value || 'Em medição'),
-        target_value: String(exp.target_value || 'Meta'),
+        baseline_value: exp.baseline_value !== undefined && exp.baseline_value !== null ? String(exp.baseline_value) : null,
+        current_value: exp.current_value !== undefined && exp.current_value !== null ? String(exp.current_value) : null,
+        target_value: exp.target_value !== undefined && exp.target_value !== null ? String(exp.target_value) : null,
         start_date: exp.start_date || new Date().toISOString().slice(0, 10),
         end_date: exp.end_date || null,
         responsible_person: exp.responsible_person || 'Gestão Rodo Point',
@@ -219,9 +226,9 @@ export class CeoRepository {
           hypothesis: data.hypothesis,
           department: data.department,
           target_kpi: data.target_kpi,
-          baseline_value: data.baseline_value,
-          current_value: data.current_value,
-          target_value: data.target_value,
+          baseline_value: data.baseline_value != null ? String(data.baseline_value) : undefined,
+          current_value: data.current_value != null ? String(data.current_value) : undefined,
+          target_value: data.target_value != null ? String(data.target_value) : undefined,
           start_date: data.start_date,
           end_date: data.end_date,
           responsible_person: data.responsible_person,
@@ -248,6 +255,61 @@ export class CeoRepository {
   }
 
   /**
+   * Valida as transições de ciclo de vida de experimentos comerciais
+   * Fluxo canônico: Planejado -> Aprovado -> Em andamento -> Concluído (ou Cancelado)
+   */
+  static validateTransition(
+    currentStatus: CommercialExperiment['status'],
+    newStatus: CommercialExperiment['status']
+  ): { valid: boolean; reason?: string } {
+    const normalize = (s: string) => {
+      const lower = (s || '').toLowerCase();
+      if (lower === 'planned') return 'planejado';
+      if (lower === 'approved') return 'aprovado';
+      if (lower === 'active') return 'em_andamento';
+      if (lower === 'completed') return 'concluido';
+      if (lower === 'cancelled') return 'cancelado';
+      return lower;
+    };
+
+    const from = normalize(currentStatus);
+    const to = normalize(newStatus);
+
+    if (from === to) return { valid: true };
+
+    if (from === 'concluido' || from === 'cancelado') {
+      return { valid: false, reason: 'Experimentos concluídos ou cancelados são históricos e não podem ser reabertos.' };
+    }
+
+    if (to === 'aprovado') {
+      if (from !== 'planejado') {
+        return { valid: false, reason: 'Apenas experimentos planejados podem ser aprovados pelo proprietário.' };
+      }
+      return { valid: true };
+    }
+
+    if (to === 'em_andamento') {
+      if (from !== 'aprovado') {
+        return { valid: false, reason: 'O experimento precisa ser aprovado formalmente pelo proprietário antes de ser iniciado.' };
+      }
+      return { valid: true };
+    }
+
+    if (to === 'concluido') {
+      if (from !== 'em_andamento') {
+        return { valid: false, reason: 'Apenas experimentos em andamento podem ser concluídos.' };
+      }
+      return { valid: true };
+    }
+
+    if (to === 'cancelado') {
+      return { valid: true };
+    }
+
+    return { valid: false, reason: `Transição inválida de "${from}" para "${to}".` };
+  }
+
+  /**
    * Atualiza status de um experimento ou encerra com decisão executiva
    */
   static async updateExperiment(
@@ -256,18 +318,35 @@ export class CeoRepository {
       status?: CommercialExperiment['status'];
       decision?: ExperimentDecision;
       decision_rationale?: string;
-      current_value?: string | number;
+      baseline_value?: string | number | null;
+      current_value?: string | number | null;
+      target_value?: string | number | null;
+      start_date?: string;
+      end_date?: string | null;
       measured_financial_impact?: number;
+      currentStatus?: CommercialExperiment['status'];
     }
   ): Promise<CeoMutationResult<void>> {
     try {
+      if (updates.status && updates.currentStatus) {
+        const validation = this.validateTransition(updates.currentStatus, updates.status);
+        if (!validation.valid) {
+          return { success: false, error: validation.reason };
+        }
+      }
+
+      // Payload estrito: nunca permite alteração de workspace_id no payload
       const payload: Record<string, unknown> = {
         updated_at: new Date().toISOString(),
       };
       if (updates.status) payload.status = updates.status;
       if (updates.decision) payload.decision = updates.decision;
-      if (updates.decision_rationale) payload.decision_rationale = updates.decision_rationale;
-      if (updates.current_value !== undefined) payload.current_value = String(updates.current_value);
+      if (updates.decision_rationale !== undefined) payload.decision_rationale = updates.decision_rationale;
+      if (updates.baseline_value !== undefined) payload.baseline_value = updates.baseline_value !== null ? String(updates.baseline_value) : null;
+      if (updates.current_value !== undefined) payload.current_value = updates.current_value !== null ? String(updates.current_value) : null;
+      if (updates.target_value !== undefined) payload.target_value = updates.target_value !== null ? String(updates.target_value) : null;
+      if (updates.start_date) payload.start_date = updates.start_date;
+      if (updates.end_date !== undefined) payload.end_date = updates.end_date;
       if (updates.measured_financial_impact !== undefined) payload.measured_financial_impact = updates.measured_financial_impact;
 
       const { error } = await supabase
@@ -291,16 +370,159 @@ export class CeoRepository {
   static async updateExperimentStatus(
     experimentId: string,
     status: CommercialExperiment['status'],
-    decision?: {
-      decision?: 'approved' | 'rejected' | 'inconclusive' | 'extended';
-      decision_date?: string;
+    options?: {
+      decision?: ExperimentDecision;
       rationale?: string;
+      baseline_value?: string | number | null;
+      current_value?: string | number | null;
+      measured_financial_impact?: number;
+      end_date?: string | null;
+      currentStatus?: CommercialExperiment['status'];
     }
   ): Promise<CeoMutationResult<void>> {
     return this.updateExperiment(experimentId, {
       status,
-      decision: decision?.decision as ExperimentDecision,
-      decision_rationale: decision?.rationale,
+      decision: options?.decision,
+      decision_rationale: options?.rationale,
+      baseline_value: options?.baseline_value,
+      current_value: options?.current_value,
+      measured_financial_impact: options?.measured_financial_impact,
+      end_date: options?.end_date,
+      currentStatus: options?.currentStatus,
     });
+  }
+
+  /**
+   * Consulta vendas reais do período do experimento para cálculo do impacto e KPIs
+   * Garantias:
+   * 1. Paginação automática (sem truncamento por limite de 1000 linhas)
+   * 2. Deduplicação estrita por deduplication_key e ID de venda (#ID)
+   * 3. Exclusão estrita de canceladas ou estornadas
+   * 4. Recuperação estruturada de itens para KPIs de produtos e margem
+   */
+  static async fetchSalesForExperiment(
+    workspaceId: string,
+    startDate: string,
+    endDate?: string | null
+  ): Promise<Array<{
+    valor: number;
+    data: string;
+    status?: string;
+    cancelada?: boolean;
+    tipo?: string;
+    deduplication_key?: string;
+    itens?: Array<{
+      nome?: string;
+      produto_id?: string;
+      quantidade: number;
+      valor_unitario?: number;
+      custo_unitario?: number;
+    }>;
+  }>> {
+    if (!workspaceId || !startDate) return [];
+
+    try {
+      const allRows: Record<string, unknown>[] = [];
+      const PAGE_SIZE = 1000;
+      let offset = 0;
+      let hasMore = true;
+
+      while (hasMore) {
+        let query = supabase
+          .from('transacoes')
+          .select(
+            'id, valor, data, status, cancelada, tipo, descricao, observacoes, itens, deduplication_key'
+          )
+          .eq('workspace_id', workspaceId)
+          .gte('data', startDate);
+
+        if (endDate) {
+          query = query.lte('data', endDate);
+        }
+
+        const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+        if (error) {
+          console.error('[CeoRepository.fetchSalesForExperiment] Erro ao buscar transações:', error.message);
+          break;
+        }
+
+        if (!data || data.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        allRows.push(...data);
+        if (data.length < PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          offset += PAGE_SIZE;
+        }
+      }
+
+      // Deduplicação estrita e filtro de transações canceladas
+      const seenKeys = new Set<string>();
+      const result: Array<{
+        valor: number;
+        data: string;
+        status?: string;
+        cancelada?: boolean;
+        tipo?: string;
+        deduplication_key?: string;
+        itens?: Array<{
+          nome?: string;
+          produto_id?: string;
+          quantidade: number;
+          valor_unitario?: number;
+          custo_unitario?: number;
+        }>;
+      }> = [];
+
+      for (const t of allRows) {
+        const isCancelled =
+          Boolean(t.cancelada) ||
+          String(t.status || '').toLowerCase() === 'cancelada' ||
+          String(t.status || '').toLowerCase() === 'cancelled';
+
+        if (isCancelled) continue;
+
+        // Extrai identificador de deduplicação
+        const rawDedup = typeof t.deduplication_key === 'string' ? t.deduplication_key.trim() : null;
+        let saleIdentifier = rawDedup;
+
+        if (!saleIdentifier) {
+          const text = `${t.descricao || ''} ${t.observacoes || ''}`;
+          const match = text.match(/#(\d+)/);
+          saleIdentifier = match ? `eyemobile:sale:${match[1]}` : String(t.id);
+        }
+
+        if (seenKeys.has(saleIdentifier)) {
+          continue; // Ignora duplicata
+        }
+        seenKeys.add(saleIdentifier);
+
+        result.push({
+          valor: Number(t.valor || 0),
+          data: String(t.data || startDate),
+          status: String(t.status || 'concluida'),
+          cancelada: false,
+          tipo: String(t.tipo || 'receita'),
+          deduplication_key: rawDedup || undefined,
+          itens: Array.isArray(t.itens)
+            ? (t.itens as unknown as Array<{
+                nome?: string;
+                produto_id?: string;
+                quantidade: number;
+                valor_unitario?: number;
+                custo_unitario?: number;
+              }>)
+            : undefined,
+        });
+      }
+
+      return result;
+    } catch (err) {
+      console.error('[CeoRepository.fetchSalesForExperiment] Falha inesperada:', err);
+      return [];
+    }
   }
 }

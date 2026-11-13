@@ -4,7 +4,9 @@
 
 export type CeoDepartment =
   | 'commercial_growth'
+  | 'comercial' // alias pt-BR
   | 'operations_loss'
+  | 'operacoes' // alias pt-BR
   | 'loss_waste' // alias
   | 'profitability'
   | 'cmv_pricing' // alias
@@ -20,6 +22,7 @@ export type CeoDepartment =
 export type OpportunityStatus =
   | 'identificada'
   | 'detected'
+  | 'planejada'
   | 'em_experimento'
   | 'implantada'
   | 'descartada';
@@ -35,6 +38,8 @@ export type OpportunityType =
 export type ExperimentStatus =
   | 'planejado'
   | 'planned'
+  | 'aprovado'
+  | 'approved'
   | 'em_andamento'
   | 'active'
   | 'concluido'
@@ -47,7 +52,13 @@ export type ExperimentDecision =
   | 'ampliar'
   | 'ajustar'
   | 'interromper'
-  | 'pendente';
+  | 'pendente'
+  | 'aprovado'
+  | 'rejeitado'
+  | 'approved'
+  | 'rejected'
+  | 'inconclusive'
+  | 'extended';
 
 export type OpportunityNature =
   | 'fato_observado'
@@ -55,6 +66,53 @@ export type OpportunityNature =
   | 'simulacao_parametrizada'
   | 'impacto_calculado'
   | 'impacto_nao_estimado';
+
+export type BaselineMeasurementType = 'automatica' | 'manual' | 'estimada';
+export type BaselineReliability = 'alta' | 'media' | 'baixa';
+export type EvaluationClassification = 'favoravel' | 'desfavoravel' | 'inconcluso' | 'dados_indisponiveis';
+
+export interface StructuredBaseline {
+  indicator: string;
+  reference_period: string;
+  initial_value: number;
+  formatted_value: string;
+  unit: string;
+  source: string;
+  sample_size: number;
+  reliability: BaselineReliability;
+  measurement_type: BaselineMeasurementType;
+  notes?: string;
+}
+
+export type ExperimentKpiType = 'ticket_medio' | 'faturamento' | 'pedidos' | 'produto_vendido' | 'margem';
+
+export interface AutomatedExperimentMeasurement {
+  experimentId: string;
+  kpiType?: ExperimentKpiType;
+  baseline: {
+    indicator: string;
+    value: number;
+    sampleSize: number;
+    period: string;
+  };
+  measurement: {
+    currentValue: number;
+    sampleSize: number;
+    period: string;
+    totalRevenue: number;
+    orderCount: number;
+    averageTicket: number;
+  };
+  delta: {
+    absolute: number;
+    percent: number | null;
+  };
+  financialImpact: number;
+  classification: EvaluationClassification;
+  measurementType: BaselineMeasurementType;
+  isStatisticallySufficient: boolean;
+  notes: string;
+}
 
 export interface GrowthOpportunity {
   id: string;
@@ -70,6 +128,7 @@ export interface GrowthOpportunity {
   confidence_score: number; // 0.00 a 1.00
   type?: OpportunityType;
   impact_level?: 'high' | 'medium' | 'low';
+  priority?: 'high' | 'medium' | 'low'; // alias para impact_level
   effort_level?: 'easy' | 'moderate' | 'complex';
   status: OpportunityStatus;
   nature?: OpportunityNature;
@@ -84,6 +143,7 @@ export interface GrowthOpportunity {
     has_sufficient_data: boolean;
     [key: string]: unknown;
   };
+  actions?: string[];
   limitations_notes?: string;
   created_at?: string;
   updated_at?: string;
@@ -102,6 +162,8 @@ export interface CommercialExperiment {
   responsible_person?: string;
   target_kpi?: string;
   baseline_value?: string | number;
+  baseline_details?: StructuredBaseline;
+  measurement_type?: BaselineMeasurementType;
   current_value?: string | number;
   target_value?: string | number;
   target_metrics?: {
@@ -119,6 +181,8 @@ export interface CommercialExperiment {
   decision?: ExperimentDecision;
   decision_rationale?: string;
   status: ExperimentStatus;
+  actions?: string[];
+  opportunity_title?: string;
   created_at: string;
   updated_at: string;
 }
@@ -173,3 +237,83 @@ export interface SalesShiftAnalysis {
   average_ticket: number;
   items_per_ticket?: number;
 }
+
+// ==============================================================================
+// ETAPA 09 — METAS SEMANAIS E MENSAIS INTELIGENTES
+// ==============================================================================
+
+export type BusinessGoalIndicator =
+  | 'faturamento'
+  | 'pedidos'
+  | 'ticket_medio'
+  | 'despesas'
+  | 'resultado_operacional'
+  | 'margem'
+  | 'produto_categoria'
+  | 'combos';
+
+export type BusinessGoalPeriodType = 'semanal' | 'mensal';
+
+export type BusinessGoalUnit = 'BRL' | 'quantidade' | 'percentual';
+
+export type BusinessGoalStatus = 'ativa' | 'concluida' | 'pausada' | 'cancelada';
+
+export interface BusinessGoalHistoryEntry {
+  date: string;
+  action: 'created' | 'updated' | 'paused' | 'resumed' | 'concluded' | 'recalibrated';
+  user_id: string;
+  previous_target?: number;
+  new_target?: number;
+  reason?: string;
+}
+
+export interface BusinessGoal {
+  id: string;
+  workspace_id: string;
+  created_by: string;
+  titulo: string;
+  indicador: BusinessGoalIndicator;
+  periodo_tipo: BusinessGoalPeriodType;
+  data_inicio: string;
+  data_fim: string;
+  ano: number;
+  mes?: number | null;
+  semana_do_ano?: number | null;
+  valor_alvo: number;
+  valor_realizado: number;
+  unidade: BusinessGoalUnit;
+  categoria_ou_produto?: string | null;
+  eyemobile_product_id?: string | null;
+  status: BusinessGoalStatus;
+  descricao?: string | null;
+  observacoes?: string | null;
+  history: BusinessGoalHistoryEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BusinessGoalCalculationResult {
+  goalId: string;
+  indicador: BusinessGoalIndicator;
+  periodo_tipo: BusinessGoalPeriodType;
+  data_inicio: string;
+  data_fim: string;
+  valor_alvo: number;
+  valor_realizado: number;
+  percentual_atingido: number;
+  valor_restante: number;
+  dias_totais: number;
+  dias_decorridos: number;
+  dias_restantes: number;
+  media_diaria_atual: number;
+  media_diaria_necessaria: number;
+  projecao_linear: number;
+  projecao_ajustada_dias_semana?: number | null;
+  comparativo_periodo_anterior?: {
+    valor_realizado_anterior: number;
+    delta_percent: number | null;
+  } | null;
+  status_ritmo: 'adiantado' | 'no_ritmo' | 'em_atraso' | 'critico';
+  is_periodo_fechado: boolean;
+}
+

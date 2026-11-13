@@ -21,7 +21,15 @@
 import { CeoExecutiveKpis, TopProdutoFaturamento } from "./CeoFinancialMetricsService";
 import { FinancialConsolidationReport } from "@/domains/finance/services/FinancialConsolidationService";
 import { CeoPeriodRange } from "../utils/ceoDateRanges";
-import { GrowthOpportunity, CommercialExperiment } from "../types";
+import {
+  GrowthOpportunity,
+  CommercialExperiment,
+  StructuredBaseline,
+  AutomatedExperimentMeasurement,
+  EvaluationClassification,
+  BaselineMeasurementType,
+  ExperimentKpiType,
+} from "../types";
 
 export interface BriefingSection {
   titulo: string;
@@ -519,45 +527,445 @@ export class CeoIntelligenceEngine {
   }
 
   /**
+   * Gate 2 — Validação Rigorosa de Baseline Real
+   *
+   * Requisitos:
+   * 1. Métrica estruturada (indicador, período de referência, valor inicial, fonte, unidade, amostra, confiabilidade).
+   * 2. Não iniciar sem baseline.
+   * 3. Não aceitar valor '0' como baseline sem confirmação de que o valor real era zero (sample_size > 0).
+   * 4. Não aceitar texto genérico ('pendente', 'a definir', etc.).
+   */
+  public static validateBaseline(
+    rawBaseline: unknown,
+    options?: {
+      sampleSize?: number;
+      indicator?: string;
+      source?: string;
+    }
+  ): {
+    valid: boolean;
+    reason?: string;
+    baseline?: StructuredBaseline;
+  } {
+    if (rawBaseline === null || rawBaseline === undefined || rawBaseline === '') {
+      return {
+        valid: false,
+        reason: 'O experimento não pode ser iniciado sem um baseline comprovado.',
+      };
+    }
+
+    // Se já for um StructuredBaseline
+    if (typeof rawBaseline === 'object' && rawBaseline !== null) {
+      const b = rawBaseline as Partial<StructuredBaseline>;
+      if (!b.indicator || b.indicator.trim() === '') {
+        return { valid: false, reason: 'Indicador do baseline não informado.' };
+      }
+      if (b.initial_value === undefined || b.initial_value === null || !Number.isFinite(b.initial_value)) {
+        return { valid: false, reason: 'Valor numérico inicial do baseline inválido.' };
+      }
+      if (b.initial_value === 0 && (!b.sample_size || b.sample_size <= 0)) {
+        return {
+          valid: false,
+          reason: "O valor '0' não é aceito como baseline sem comprovação documental de que o valor real era zero.",
+        };
+      }
+      return {
+        valid: true,
+        baseline: {
+          indicator: b.indicator,
+          reference_period: b.reference_period || 'Últimos 30 dias',
+          initial_value: b.initial_value,
+          formatted_value: b.formatted_value || (b.unit === 'R$' ? `R$ ${b.initial_value.toFixed(2)}` : `${b.initial_value}`),
+          unit: b.unit || 'R$',
+          source: b.source || 'eyemobile_pdv',
+          sample_size: b.sample_size || (options?.sampleSize ?? 1),
+          reliability: b.reliability || 'alta',
+          measurement_type: b.measurement_type || 'automatica',
+          notes: b.notes,
+        },
+      };
+    }
+
+    // Se for string ou number
+    const strVal = String(rawBaseline).trim();
+    const genericRe = /^(pendente|a definir|definir|teste|nao informado|não informado|n\/a|null|undefined)$/i;
+    if (genericRe.test(strVal)) {
+      return {
+        valid: false,
+        reason: 'Texto genérico não é aceito como baseline comprovado.',
+      };
+    }
+
+    const clean = strVal.replace(/[^0-9,-]/g, '').replace(',', '.');
+    const parsedNum = parseFloat(clean);
+
+    if (isNaN(parsedNum)) {
+      return {
+        valid: false,
+        reason: 'Não foi possível extrair um valor numérico comprovado do baseline informado.',
+      };
+    }
+
+    if (parsedNum === 0) {
+      const sample = options?.sampleSize ?? 0;
+      if (sample <= 0) {
+        return {
+          valid: false,
+          reason: "O valor '0' não é aceito como baseline sem confirmação de que o valor real era zero com amostra observada.",
+        };
+      }
+    }
+
+    return {
+      valid: true,
+      baseline: {
+        indicator: options?.indicator || 'Faturamento / Ticket',
+        reference_period: 'Período anterior ao experimento',
+        initial_value: parsedNum,
+        formatted_value: strVal,
+        unit: strVal.includes('R$') ? 'R$' : strVal.includes('%') ? '%' : 'unidades',
+        source: options?.source || 'eyemobile_pdv',
+        sample_size: options?.sampleSize ?? 1,
+        reliability: (options?.sampleSize ?? 0) >= 7 ? 'alta' : 'media',
+        measurement_type: 'automatica',
+      },
+    };
+  }
+
+  /**
+   * Helper para normalização de tipo de KPI a partir de texto livre ou valor canônico
+   */
+  public static resolveKpiType(raw?: string | null): ExperimentKpiType {
+    const text = String(raw || '').toLowerCase().trim();
+    if (text.includes('ticket')) return 'ticket_medio';
+    if (text.includes('pedido') || text.includes('transa') || text.includes('volume')) return 'pedidos';
+    if (text.includes('produto') || text.includes('item') || text.includes('unidade')) return 'produto_vendido';
+    if (text.includes('margem')) return 'margem';
+    return 'faturamento';
+  }
+
+  /**
+   * Gate 3 & Gate 1 — Medição Automática de Experimentos Comerciais a partir de Vendas do PDV
+   * Suporta 5 tipos de KPIs oficiais:
+   * 1. ticket_medio: Variação de valor médio por pedido
+   * 2. faturamento: Variação de receita média diária
+   * 3. pedidos: Variação de volume de pedidos diários
+   * 4. produto_vendido: Variação de quantidade de item vendido do catálogo Eyemobile
+   * 5. margem: Variação de margem bruta/operacional em %
+   *
+   * Requisitos:
+   * 1. Desconsiderar vendas canceladas ou estornadas.
+   * 2. Comparar período do experimento com baseline histórico.
+   * 3. Apresentar resultado financeiro medido, variação percentual real e observações analisadas.
+   * 4. Diferenciar medição automática comprovada de manual e estimada.
+   */
+  public static measureExperimentFromSales(params: {
+    experiment: CommercialExperiment;
+    sales: Array<{
+      valor: number;
+      data: string;
+      status?: string;
+      cancelada?: boolean;
+      tipo?: string;
+      custo?: number;
+      itens?: Array<{
+        nome?: string;
+        produto_id?: string;
+        quantidade: number;
+        valor_unitario?: number;
+        custo_unitario?: number;
+      }>;
+    }>;
+    baselineDailyAverage?: number;
+    baselineSampleSize?: number;
+    baselinePeriod?: string;
+    experimentDaysCount?: number;
+    measurementType?: BaselineMeasurementType;
+    kpiType?: ExperimentKpiType | string;
+    targetProductName?: string;
+    targetProductId?: string;
+  }): AutomatedExperimentMeasurement {
+    const {
+      experiment,
+      sales,
+      baselineDailyAverage = 0,
+      baselineSampleSize = 0,
+      baselinePeriod = 'Período de referência histórico',
+      experimentDaysCount,
+      measurementType = 'automatica',
+      kpiType,
+      targetProductName,
+      targetProductId,
+    } = params;
+
+    const resolvedKpiType: ExperimentKpiType = kpiType
+      ? CeoIntelligenceEngine.resolveKpiType(kpiType)
+      : CeoIntelligenceEngine.resolveKpiType(experiment.target_kpi);
+
+    // 1. Desconsiderar vendas canceladas ou estornadas
+    const validSales = (sales || []).filter((s) => {
+      const st = (s.status || '').toLowerCase();
+      if (st === 'cancelada' || st === 'estornada' || st === 'cancelled') return false;
+      if (s.cancelada === true) return false;
+      if (s.tipo && s.tipo !== 'receita') return false;
+      return Number(s.valor || 0) > 0;
+    });
+
+    const sampleSize = validSales.length;
+    const totalRevenue = validSales.reduce((acc, s) => acc + Number(s.valor || 0), 0);
+    const averageTicket = sampleSize > 0 ? Math.round((totalRevenue / sampleSize) * 100) / 100 : 0;
+
+    const distinctDates = new Set(validSales.map((s) => s.data.slice(0, 10)));
+    const calculatedDays = distinctDates.size;
+    const daysCount = Math.max(1, experimentDaysCount || calculatedDays || 1);
+
+    // Variáveis por KPI
+    let currentValue = 0;
+    let indicatorName = experiment.target_kpi || 'Faturamento Diário';
+    let deltaAbs = 0;
+    let deltaPercent: number | null = null;
+    let financialImpact = 0;
+    let hasAnyCostReported = true;
+
+    switch (resolvedKpiType) {
+      case 'ticket_medio': {
+        indicatorName = experiment.target_kpi || 'Ticket Médio';
+        currentValue = averageTicket;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+        financialImpact = Math.round(deltaAbs * sampleSize * 100) / 100;
+        break;
+      }
+
+      case 'pedidos': {
+        indicatorName = experiment.target_kpi || 'Pedidos por Dia';
+        currentValue = Math.round((sampleSize / daysCount) * 100) / 100;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+        financialImpact = Math.round(deltaAbs * daysCount * averageTicket * 100) / 100;
+        break;
+      }
+
+      case 'produto_vendido': {
+        indicatorName =
+          experiment.target_kpi ||
+          (targetProductName ? `Vendas de ${targetProductName}` : 'Produtos Vendidos por Dia');
+
+        let totalProductQty = 0;
+        let totalProductRevenue = 0;
+
+        for (const s of validSales) {
+          if (s.itens && s.itens.length > 0) {
+            for (const it of s.itens) {
+              const matchName = targetProductName
+                ? (it.nome || '').toLowerCase().includes(targetProductName.toLowerCase())
+                : false;
+              const matchId = targetProductId ? it.produto_id === targetProductId : false;
+
+              if (matchName || matchId || (!targetProductName && !targetProductId)) {
+                totalProductQty += Number(it.quantidade || 0);
+                totalProductRevenue += Number(it.quantidade || 0) * Number(it.valor_unitario || 0);
+              }
+            }
+          }
+        }
+
+        if (totalProductQty === 0 && !targetProductName && !targetProductId) {
+          totalProductQty = sampleSize;
+        }
+
+        currentValue = Math.round((totalProductQty / daysCount) * 100) / 100;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+
+        const avgPrice =
+          totalProductQty > 0 && totalProductRevenue > 0
+            ? totalProductRevenue / totalProductQty
+            : averageTicket;
+        financialImpact = Math.round(deltaAbs * daysCount * avgPrice * 100) / 100;
+        break;
+      }
+
+      case 'margem': {
+        indicatorName = experiment.target_kpi || 'Margem Operacional (%)';
+        let revenueWithKnownCost = 0;
+        let totalCost = 0;
+        hasAnyCostReported = false;
+
+        for (const s of validSales) {
+          if (s.custo != null && Number.isFinite(s.custo) && s.custo > 0) {
+            hasAnyCostReported = true;
+            revenueWithKnownCost += Number(s.valor || 0);
+            totalCost += Number(s.custo);
+          } else if (s.itens && s.itens.length > 0) {
+            let itemCostSum = 0;
+            let itemHasCost = false;
+            for (const it of s.itens) {
+              if (it.custo_unitario != null && Number.isFinite(it.custo_unitario) && it.custo_unitario > 0) {
+                itemHasCost = true;
+                itemCostSum += Number(it.custo_unitario) * Number(it.quantidade || 1);
+              }
+            }
+            if (itemHasCost) {
+              hasAnyCostReported = true;
+              revenueWithKnownCost += Number(s.valor || 0);
+              totalCost += itemCostSum;
+            }
+          }
+        }
+
+        // Se nenhuma venda possui custo cadastrado, não inventa margem nem trata custo como zero
+        let currentMarginPercent = 0;
+        if (!hasAnyCostReported || revenueWithKnownCost === 0) {
+          currentMarginPercent = 0;
+        } else {
+          currentMarginPercent =
+            Math.round(((revenueWithKnownCost - totalCost) / revenueWithKnownCost) * 1000) / 10;
+        }
+
+        currentValue = currentMarginPercent;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+
+        financialImpact = Math.round(((deltaAbs / 100) * totalRevenue) * 100) / 100;
+        break;
+      }
+
+      case 'faturamento':
+      default: {
+        indicatorName = experiment.target_kpi || 'Faturamento Diário';
+        currentValue = Math.round((totalRevenue / daysCount) * 100) / 100;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+        financialImpact = Math.round(deltaAbs * daysCount * 100) / 100;
+        break;
+      }
+    }
+
+    // Suficiência estatística: mínimo 3 dias com vendas ou mínimo 5 pedidos
+    const isStatisticallySufficient = calculatedDays >= 3 || sampleSize >= 5;
+
+    let classification: EvaluationClassification = 'dados_indisponiveis';
+    let notes = '';
+
+    if (sampleSize === 0) {
+      classification = 'dados_indisponiveis';
+      notes = 'Nenhuma venda confirmada registrada no período do experimento.';
+    } else if (resolvedKpiType === 'margem' && !hasAnyCostReported) {
+      classification = 'dados_indisponiveis';
+      notes =
+        'Vendas identificadas no período, porém sem fichas técnicas ou custos de mercadorias confirmados. Margem não pode ser apurada com custo zero fictício.';
+    } else if (!isStatisticallySufficient) {
+      classification = 'inconcluso';
+      notes = `Amostra preliminar (${sampleSize} vendas em ${calculatedDays} dias). Necessário maior período para relevância estatística.`;
+    } else if (deltaAbs > 0) {
+      classification = 'favoravel';
+      notes = `Resultado favorável em ${indicatorName} com impacto financeiro incremental medido de R$ ${financialImpact.toFixed(2)}.`;
+    } else {
+      classification = 'desfavoravel';
+      notes = `Resultado desfavorável em ${indicatorName} com variação de ${deltaAbs > 0 ? '+' : ''}${deltaAbs} em relação ao baseline.`;
+    }
+
+    return {
+      experimentId: experiment.id,
+      kpiType: resolvedKpiType,
+      baseline: {
+        indicator: indicatorName,
+        value: baselineDailyAverage,
+        sampleSize: baselineSampleSize,
+        period: baselinePeriod,
+      },
+      measurement: {
+        currentValue,
+        sampleSize,
+        period: `${experiment.start_date} até o momento (${daysCount} dias operacionais)`,
+        totalRevenue,
+        orderCount: sampleSize,
+        averageTicket,
+      },
+      delta: {
+        absolute: deltaAbs,
+        percent: deltaPercent,
+      },
+      financialImpact,
+      classification,
+      measurementType,
+      isStatisticallySufficient,
+      notes,
+    };
+  }
+
+  /**
    * 4.4 — Ciclo de Vida de Experimentos Comerciais (antes/depois e baseline)
+   * Avaliação estatisticamente válida:
+   * - Nunca inventa 100% de ganho quando baseline é 0 ou ausente.
+   * - Classificação rigorosa: favoravel, desfavoravel, inconcluso, dados_indisponiveis.
    */
   public static evaluateExperimentProgress(
     experiment: CommercialExperiment,
     currentKpiValue: number
   ): {
     status: CommercialExperiment["status"];
-    evolucaoPercent: number;
+    evolucaoPercent: number | null;
     resultadoObservado: string;
     conclusaoRecomendada: "manter" | "encerrar" | "ajustar";
+    classificacao: EvaluationClassification;
+    baselineComprovado: boolean;
   } {
-    const parsePtBrNumber = (val: string): number => {
-      if (!val) return 0;
-      const clean = val.replace(/[^0-9,-]/g, "").replace(",", ".");
+    const parsePtBrNumber = (val: string | number | undefined | null): number => {
+      if (val == null) return 0;
+      if (typeof val === 'number') return Number.isFinite(val) ? val : 0;
+      const clean = String(val).replace(/[^0-9,-]/g, "").replace(",", ".");
       return parseFloat(clean) || 0;
     };
 
+    const hasBaseline = experiment.baseline_value !== undefined && experiment.baseline_value !== null && experiment.baseline_value !== '';
     const baseline = parsePtBrNumber(experiment.baseline_value);
     const target = parsePtBrNumber(experiment.target_value) || baseline;
 
-    let evolucaoPercent = 0;
-    if (baseline > 0) {
-      evolucaoPercent = Math.round(((currentKpiValue - baseline) / baseline) * 1000) / 10;
-    } else if (currentKpiValue > 0) {
-      evolucaoPercent = 100;
+    if (!hasBaseline || baseline <= 0) {
+      return {
+        status: experiment.status,
+        evolucaoPercent: null,
+        resultadoObservado: `Baseline: Não informado ou não comprovado -> Atual: ${currentKpiValue.toFixed(2)}. Não é possível calcular ganho percentual sem baseline inicial comprovado.`,
+        conclusaoRecomendada: "ajustar",
+        classificacao: "dados_indisponiveis",
+        baselineComprovado: false,
+      };
     }
 
+    const evolucaoPercent = Math.round(((currentKpiValue - baseline) / baseline) * 1000) / 10;
     const atingiuMeta = target > baseline ? currentKpiValue >= target : currentKpiValue <= target;
     const conclusaoRecomendada = atingiuMeta ? "manter" : evolucaoPercent > 0 ? "ajustar" : "encerrar";
 
+    let classificacao: EvaluationClassification = "inconcluso";
+    if (atingiuMeta || evolucaoPercent > 0) {
+      classificacao = "favoravel";
+    } else {
+      classificacao = "desfavoravel";
+    }
+
     const resultadoObservado = `Baseline: ${experiment.baseline_value} -> Atual: ${currentKpiValue.toFixed(2)} (${
       evolucaoPercent >= 0 ? "+" : ""
-    }${evolucaoPercent}%). Meta: ${experiment.target_value}.`;
+    }${evolucaoPercent}%). Meta: ${experiment.target_value || "A definir"}.`;
 
     return {
       status: experiment.status,
       evolucaoPercent,
       resultadoObservado,
       conclusaoRecomendada,
+      classificacao,
+      baselineComprovado: true,
     };
   }
 }
