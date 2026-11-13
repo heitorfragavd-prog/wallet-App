@@ -250,9 +250,14 @@ describe("ETAPA 9.7 — Comprehensive Security & Hardening Suite", () => {
         },
       };
 
+      const mockApi = {
+        sendMessage: vi.fn().mockResolvedValue({ ok: true }),
+      };
+
       const deps: Partial<TelegramAdapterDependencies> = {
         idempotencyRepo: mockRepo,
         telegramBotToken: "mock-token",
+        telegramApi: mockApi as any,
         supabase: {
           from: vi.fn().mockReturnThis(),
           select: vi.fn().mockReturnThis(),

@@ -82,7 +82,7 @@ export const ConversasSidebarList: React.FC<ConversasSidebarListProps> = ({
     const existingTypes = new Set(
       threads.filter((t) => t.kind === "group" && t.grupo).map((t) => t.grupo!.tipo_grupo),
     );
-    return Math.max(0, 4 - existingTypes.size);
+    return Math.max(0, 5 - existingTypes.size);
   }, [threads]);
 
   const renderThreadRow = (thread: ThreadListItem) => {
@@ -239,7 +239,7 @@ export const ConversasSidebarList: React.FC<ConversasSidebarListProps> = ({
             <Plus className="w-3.5 h-3.5" />
             {provisioning
               ? "Criando grupos padrão..."
-              : `Completar grupos operacionais (${4 - missingStandardCount}/4)`}
+              : `Completar grupos operacionais (${5 - missingStandardCount}/5)`}
           </Button>
         )}
       </div>

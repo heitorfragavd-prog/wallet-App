@@ -2,7 +2,8 @@ export type OperationalGroupType =
   | "fechamento"
   | "nfe_boletos"
   | "contas_empresa"
-  | "conversas_loja";
+  | "conversas_loja"
+  | "folguistas";
 
 export interface GroupPermissions {
   ler: boolean;
@@ -246,6 +247,25 @@ export const GROUP_TYPE_META: Record<
       "Registrar recado de troca de turno",
       "Checklist de abertura e fechamento da loja",
       "Registrar ocorrência operacional na loja",
+    ],
+  },
+  folguistas: {
+    label: "Folguistas Rodo Point",
+    shortLabel: "Folguistas",
+    emoji: "👥",
+    badgeClass: "bg-purple-500/15 text-purple-300 border-purple-500/30",
+    securityNote:
+      "Gestão inteligente de escalas, confirmação de disponibilidades, regras de turnos e folgas e recebimento de fechamentos de caixa.",
+    defaultCapabilities: [
+      { id: "consultar_escalas", label: "Consultar escalas e turnos" },
+      { id: "confirmar_disponibilidade", label: "Registrar disponibilidades de folguistas" },
+      { id: "fechamento_caixa", label: "Receber fechamento e espelhar no grupo principal" },
+      { id: "consultar_rotinas", label: "Orientações operacionais e regras de turno" },
+    ],
+    quickPrompts: [
+      "Qual é a escala deste fim de semana?",
+      "Quem são os folguistas disponíveis para sábado?",
+      "Fechamento de hoje: Dinheiro R$ 0,00 | Pix R$ 0,00 | Débito R$ 0,00 | Crédito R$ 0,00",
     ],
   },
 };
