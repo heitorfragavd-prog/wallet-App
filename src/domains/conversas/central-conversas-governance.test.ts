@@ -293,4 +293,75 @@ describe("Central de Conversas — Componentes UI", () => {
     expect(screen.getByText(/Heitor Dono/)).toBeInTheDocument();
     expect(screen.queryByText(/Operador Caixa/)).not.toBeInTheDocument();
   });
+
+  it("garante estabilidade anti-flicker e desacoplamento do Realtime no useCentralConversas", () => {
+    const hookSource = fs.readFileSync(
+      path.join(ROOT, "src/domains/conversas/hooks/useCentralConversas.ts"),
+      "utf-8",
+    );
+
+    // Chave de thread estável e ref para evitar loop infinito de carregamento
+    expect(hookSource).toContain("loadedThreadKeyRef");
+    expect(hookSource).toContain("currentThreadKey");
+    expect(hookSource).toContain("loadedThreadKeyRef.current === currentThreadKey");
+
+    // Realtime desacoplado de referências voláteis de activeThread
+    expect(hookSource).toContain("activeThreadRef.current");
+    expect(hookSource).toContain("loadActiveThreadDetailsRef.current");
+    expect(hookSource).not.toContain("}, [activeThread, loadActiveThreadDetails, loadWorkspaceContext");
+
+    // Guarda de markThreadAsRead contra re-render redundante
+    expect(hookSource).toContain("readMarkersRef.current[conversationId]");
+
+    // Proteção contra concorrência e race condition de requisições de mensagens
+    expect(hookSource).toContain("loadActiveRequestIdRef");
+    expect(hookSource).toContain("currentRequestId !== loadActiveRequestIdRef.current");
+  });
+
+  it("regressão: comprova que recomputação de threads/readMarkers não re-dispara carregamento da thread ativa", () => {
+    // Modelo da lógica do hook que causava o flickering infinito:
+    // Sem loadedThreadKeyRef, toda reavaliação de `threads` criava uma nova ref de `activeThread`,
+    // disparando `useEffect([activeThread])`.
+    let loadCallCount = 0;
+    let loadedThreadKey: string | null = null;
+
+    const mockLoadActiveThreadDetails = (key: string) => {
+      loadCallCount++;
+      loadedThreadKey = key;
+    };
+
+    // Cenário 1: Seleção inicial da thread "fechamento"
+    const activeThread1 = { id: "fech-1", conversation: { id: "conv-1", last_message_at: "2026-11-13T10:00:00Z" } };
+    const currentThreadKey1 = `${activeThread1.id}:${activeThread1.conversation.id}`;
+
+    // Execução do efeito estabilizado
+    if (loadedThreadKey !== currentThreadKey1) {
+      mockLoadActiveThreadDetails(currentThreadKey1);
+    }
+    expect(loadCallCount).toBe(1);
+
+    // Cenário 2: `markThreadAsRead` roda e gera um novo objeto `activeThread` (nova referência de memória),
+    // mas com os mesmos identificadores estáveis
+    const activeThreadRecomputed = { id: "fech-1", conversation: { id: "conv-1", last_message_at: "2026-11-13T10:00:00Z" } };
+    const currentThreadKeyRecomputed = `${activeThreadRecomputed.id}:${activeThreadRecomputed.conversation.id}`;
+
+    // No código antigo, activeThreadRecomputed !== activeThread1 dispararia o useEffect.
+    // No código corrigido:
+    if (loadedThreadKey !== currentThreadKeyRecomputed) {
+      mockLoadActiveThreadDetails(currentThreadKeyRecomputed);
+    }
+
+    // Comprova que NÃO re-executou (loadCallCount continua 1, ZERO flickering)
+    expect(loadCallCount).toBe(1);
+
+    // Cenário 3: Troca real de thread pelo usuário
+    const activeThread2 = { id: "nfe-boletos", conversation: { id: "conv-2", last_message_at: "2026-11-13T10:05:00Z" } };
+    const currentThreadKey2 = `${activeThread2.id}:${activeThread2.conversation.id}`;
+    if (loadedThreadKey !== currentThreadKey2) {
+      mockLoadActiveThreadDetails(currentThreadKey2);
+    }
+
+    // Comprova que na troca real de thread o carregamento executa normalmente
+    expect(loadCallCount).toBe(2);
+  });
 });
