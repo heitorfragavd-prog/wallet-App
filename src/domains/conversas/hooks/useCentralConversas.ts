@@ -158,6 +158,10 @@ export function useCentralConversas() {
   const signedUrlCacheRef = useRef<Map<string, { url: string; expiresAt: number }>>(new Map());
   const selectedThreadIdRef = useRef<string | null>(null);
   selectedThreadIdRef.current = selectedThreadId;
+  const readMarkersRef = useRef<Record<string, string>>({});
+  readMarkersRef.current = readMarkers;
+  const loadedThreadKeyRef = useRef<string | null>(null);
+  const loadActiveRequestIdRef = useRef<number>(0);
 
   const myDisplayName = useMemo(() => {
     const meta = (user?.user_metadata || {}) as Record<string, unknown>;
@@ -176,7 +180,7 @@ export function useCentralConversas() {
     return "Operador";
   }, [activeWorkspace?.activeWorkspaceRole, isOwner]);
 
-  const loadWorkspaceContext = useCallback(async () => {
+  const loadWorkspaceContext = useCallback(async (silent = false) => {
     if (!user?.id || !workspaceId) {
       setGrupos([]);
       setParticipantes([]);
@@ -188,7 +192,9 @@ export function useCentralConversas() {
       return;
     }
 
-    setLoadingThreads(true);
+    if (!silent) {
+      setLoadingThreads(true);
+    }
     try {
       const [
         gruposRes,
@@ -332,6 +338,7 @@ export function useCentralConversas() {
       setGrupos((gruposRes.data || []) as GrupoConfig[]);
       setParticipantes(enrichedParticipants);
       setConversations((convsRes.data || []) as ConversaRecord[]);
+      readMarkersRef.current = readMap;
       setReadMarkers(readMap);
       setAllPendingProposals((pendingProposalsRes.data || []) as ConversaActionProposal[]);
       setWorkspaceMembers(enrichedMembers);
@@ -340,9 +347,11 @@ export function useCentralConversas() {
         error: err instanceof Error ? err.message : String(err),
       });
     } finally {
-      setLoadingThreads(false);
+      if (!silent) {
+        setLoadingThreads(false);
+      }
     }
-  }, [activeWorkspace?.user_id, myDisplayName, user, workspaceId]);
+  }, [activeWorkspace?.user_id, myDisplayName, user?.email, user?.id, workspaceId]);
 
   useEffect(() => {
     void loadWorkspaceContext();
@@ -535,6 +544,14 @@ export function useCentralConversas() {
     [selectedThreadId, threads],
   );
 
+  const activeThreadRef = useRef<ThreadListItem | null>(null);
+  activeThreadRef.current = activeThread;
+
+  const currentThreadKey = useMemo(() => {
+    if (!activeThread) return null;
+    return `${activeThread.id}:${activeThread.conversation?.id ?? "noconv"}`;
+  }, [activeThread]);
+
   const ensureGroupConversationId = useCallback(
     async (thread: ThreadListItem): Promise<string> => {
       if (thread.conversation?.id) return thread.conversation.id;
@@ -608,10 +625,25 @@ export function useCentralConversas() {
   );
 
   const markThreadAsRead = useCallback(
-    async (conversationId: string) => {
+    async (conversationId: string, lastMessageAt?: string | null) => {
       if (!user?.id || !workspaceId) return;
+
+      const currentMarker = readMarkersRef.current[conversationId];
+      if (
+        lastMessageAt &&
+        currentMarker &&
+        new Date(currentMarker).getTime() >= new Date(lastMessageAt).getTime()
+      ) {
+        return;
+      }
+
       const nowIso = new Date().toISOString();
-      setReadMarkers((prev) => ({ ...prev, [conversationId]: nowIso }));
+      readMarkersRef.current[conversationId] = nowIso;
+      setReadMarkers((prev) => {
+        if (prev[conversationId] === nowIso) return prev;
+        return { ...prev, [conversationId]: nowIso };
+      });
+
       try {
         await supabase.from("grupo_conversas_leitura" as never).upsert(
           {
@@ -631,19 +663,25 @@ export function useCentralConversas() {
   );
 
   const loadActiveThreadDetails = useCallback(
-    async (thread: ThreadListItem | null) => {
+    async (thread: ThreadListItem | null, options?: { silent?: boolean }) => {
+      const currentRequestId = ++loadActiveRequestIdRef.current;
       if (!thread || !workspaceId) {
         setMessages([]);
         setAttachments([]);
         setProposals([]);
         setFechamentos([]);
+        if (!options?.silent) {
+          setLoadingMessages(false);
+        }
         return;
       }
 
       const convId = thread.conversation?.id;
       const grupoId = thread.grupo?.id;
 
-      setLoadingMessages(true);
+      if (!options?.silent) {
+        setLoadingMessages(true);
+      }
       try {
         if (convId) {
           const [msgRes, attRes, propRes] = await Promise.all([
@@ -678,11 +716,16 @@ export function useCentralConversas() {
               .limit(40),
           ]);
 
+          if (currentRequestId !== loadActiveRequestIdRef.current) return;
+
           setMessages((msgRes.data || []) as ConversaMessage[]);
           setAttachments((attRes.data || []) as ConversaAttachment[]);
           setProposals((propRes.data || []) as ConversaActionProposal[]);
-          void markThreadAsRead(convId);
+          if (thread.unreadCount > 0) {
+            void markThreadAsRead(convId, thread.conversation?.last_message_at);
+          }
         } else {
+          if (currentRequestId !== loadActiveRequestIdRef.current) return;
           setMessages([]);
           setAttachments([]);
           setProposals([]);
@@ -697,24 +740,55 @@ export function useCentralConversas() {
             .eq("workspace_id", workspaceId)
             .order("created_at", { ascending: false })
             .limit(12);
+
+          if (currentRequestId !== loadActiveRequestIdRef.current) return;
           setFechamentos((fechData || []) as FechamentoCaixaItem[]);
         } else {
+          if (currentRequestId !== loadActiveRequestIdRef.current) return;
           setFechamentos([]);
         }
       } catch (err) {
+        if (currentRequestId !== loadActiveRequestIdRef.current) return;
         logger.error("central_conversas_thread_load_failed", {
           error: err instanceof Error ? err.message : String(err),
         });
       } finally {
-        setLoadingMessages(false);
+        if (currentRequestId === loadActiveRequestIdRef.current) {
+          if (!options?.silent) {
+            setLoadingMessages(false);
+          }
+        }
       }
     },
     [markThreadAsRead, workspaceId],
   );
 
   useEffect(() => {
-    void loadActiveThreadDetails(activeThread);
-  }, [activeThread, loadActiveThreadDetails]);
+    if (!currentThreadKey) {
+      if (loadedThreadKeyRef.current !== null) {
+        loadedThreadKeyRef.current = null;
+        setMessages([]);
+        setAttachments([]);
+        setProposals([]);
+        setFechamentos([]);
+      }
+      return;
+    }
+
+    if (loadedThreadKeyRef.current === currentThreadKey) {
+      return;
+    }
+
+    loadedThreadKeyRef.current = currentThreadKey;
+    void loadActiveThreadDetails(activeThreadRef.current);
+  }, [currentThreadKey, loadActiveThreadDetails]);
+
+  const loadActiveThreadDetailsRef = useRef(loadActiveThreadDetails);
+  loadActiveThreadDetailsRef.current = loadActiveThreadDetails;
+  const loadWorkspaceContextRef = useRef(loadWorkspaceContext);
+  loadWorkspaceContextRef.current = loadWorkspaceContext;
+  const markThreadAsReadRef = useRef(markThreadAsRead);
+  markThreadAsReadRef.current = markThreadAsRead;
 
   // Realtime para mensagens, conversas, propostas, fechamentos e participantes
   useEffect(() => {
@@ -739,12 +813,12 @@ export function useCentralConversas() {
               setMessages((prev) =>
                 prev.some((m) => m.id === incoming.id) ? prev : [...prev, incoming],
               );
-              void markThreadAsRead(incoming.conversation_id);
+              void markThreadAsReadRef.current(incoming.conversation_id, incoming.created_at);
             } else {
-              void loadActiveThreadDetails(activeThread);
+              void loadActiveThreadDetailsRef.current(activeThreadRef.current, { silent: true });
             }
           }
-          void loadWorkspaceContext();
+          void loadWorkspaceContextRef.current(true);
         },
       )
       .on(
@@ -756,8 +830,8 @@ export function useCentralConversas() {
           filter: `workspace_id=eq.${workspaceId}`,
         },
         () => {
-          void loadWorkspaceContext();
-          void loadActiveThreadDetails(activeThread);
+          void loadWorkspaceContextRef.current(true);
+          void loadActiveThreadDetailsRef.current(activeThreadRef.current, { silent: true });
         },
       )
       .on(
@@ -769,7 +843,7 @@ export function useCentralConversas() {
           filter: `workspace_id=eq.${workspaceId}`,
         },
         () => {
-          void loadWorkspaceContext();
+          void loadWorkspaceContextRef.current(true);
         },
       )
       .on(
@@ -781,7 +855,7 @@ export function useCentralConversas() {
           filter: `workspace_id=eq.${workspaceId}`,
         },
         () => {
-          void loadWorkspaceContext();
+          void loadWorkspaceContextRef.current(true);
         },
       )
       .on(
@@ -793,7 +867,7 @@ export function useCentralConversas() {
           filter: `workspace_id=eq.${workspaceId}`,
         },
         () => {
-          void loadWorkspaceContext();
+          void loadWorkspaceContextRef.current(true);
         },
       )
       .on(
@@ -805,7 +879,7 @@ export function useCentralConversas() {
           filter: `workspace_id=eq.${workspaceId}`,
         },
         () => {
-          void loadActiveThreadDetails(activeThread);
+          void loadActiveThreadDetailsRef.current(activeThreadRef.current, { silent: true });
         },
       )
       .subscribe();
@@ -813,14 +887,7 @@ export function useCentralConversas() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [
-    activeThread,
-    loadActiveThreadDetails,
-    loadWorkspaceContext,
-    markThreadAsRead,
-    user?.id,
-    workspaceId,
-  ]);
+  }, [user?.id, workspaceId]);
 
   const resolveAttachmentSignedUrl = useCallback(
     async (storagePath?: string | null, conversationId?: string | null): Promise<string | null> => {
@@ -1000,15 +1067,19 @@ export function useCentralConversas() {
         }
 
         setSelectedThreadId(convId);
+        loadedThreadKeyRef.current = `${convId}:${convId}`;
         await Promise.all([
-          loadWorkspaceContext(),
-          loadActiveThreadDetails({
-            ...activeThread,
-            id: convId,
-            conversation: activeThread.conversation
-              ? { ...activeThread.conversation, id: convId }
-              : ({ id: convId } as ConversaRecord),
-          }),
+          loadWorkspaceContext(true),
+          loadActiveThreadDetails(
+            {
+              ...activeThread,
+              id: convId,
+              conversation: activeThread.conversation
+                ? { ...activeThread.conversation, id: convId }
+                : ({ id: convId } as ConversaRecord),
+            },
+            { silent: true },
+          ),
         ]);
         return true;
       } catch (err) {
@@ -1067,7 +1138,10 @@ export function useCentralConversas() {
               : "A proposta pendente foi descartada com segurança.",
         });
 
-        await Promise.all([loadWorkspaceContext(), loadActiveThreadDetails(activeThread)]);
+        await Promise.all([
+          loadWorkspaceContext(true),
+          loadActiveThreadDetails(activeThreadRef.current, { silent: true }),
+        ]);
         return true;
       } catch (err) {
         toast({
@@ -1340,8 +1414,8 @@ export function useCentralConversas() {
     attachments,
     proposals,
     fechamentos,
-    refresh: loadWorkspaceContext,
-    refreshThread: () => loadActiveThreadDetails(activeThread),
+    refresh: () => loadWorkspaceContext(false),
+    refreshThread: () => loadActiveThreadDetails(activeThreadRef.current),
     resolveAttachmentSignedUrl,
     sendMessage,
     confirmOrCancelProposal,
