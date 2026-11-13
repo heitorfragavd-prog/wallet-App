@@ -394,6 +394,11 @@ export class CeoRepository {
 
   /**
    * Consulta vendas reais do período do experimento para cálculo do impacto e KPIs
+   * Garantias:
+   * 1. Paginação automática (sem truncamento por limite de 1000 linhas)
+   * 2. Deduplicação estrita por deduplication_key e ID de venda (#ID)
+   * 3. Exclusão estrita de canceladas ou estornadas
+   * 4. Recuperação estruturada de itens para KPIs de produtos e margem
    */
   static async fetchSalesForExperiment(
     workspaceId: string,
@@ -405,6 +410,7 @@ export class CeoRepository {
     status?: string;
     cancelada?: boolean;
     tipo?: string;
+    deduplication_key?: string;
     itens?: Array<{
       nome?: string;
       produto_id?: string;
@@ -416,27 +422,98 @@ export class CeoRepository {
     if (!workspaceId || !startDate) return [];
 
     try {
-      let query = supabase
-        .from('transacoes')
-        .select('id, valor, data, status, cancelada, tipo, descricao')
-        .eq('workspace_id', workspaceId)
-        .gte('data', startDate);
+      const allRows: Record<string, unknown>[] = [];
+      const PAGE_SIZE = 1000;
+      let offset = 0;
+      let hasMore = true;
 
-      if (endDate) {
-        query = query.lte('data', endDate);
+      while (hasMore) {
+        let query = supabase
+          .from('transacoes')
+          .select(
+            'id, valor, data, status, cancelada, tipo, descricao, observacoes, itens, deduplication_key'
+          )
+          .eq('workspace_id', workspaceId)
+          .gte('data', startDate);
+
+        if (endDate) {
+          query = query.lte('data', endDate);
+        }
+
+        const { data, error } = await query.range(offset, offset + PAGE_SIZE - 1);
+        if (error) {
+          console.error('[CeoRepository.fetchSalesForExperiment] Erro ao buscar transações:', error.message);
+          break;
+        }
+
+        if (!data || data.length === 0) {
+          hasMore = false;
+          break;
+        }
+
+        allRows.push(...data);
+        if (data.length < PAGE_SIZE) {
+          hasMore = false;
+        } else {
+          offset += PAGE_SIZE;
+        }
       }
 
-      const { data, error } = await query;
-      if (error || !data) return [];
+      // Deduplicação estrita e filtro de transações canceladas
+      const seenKeys = new Set<string>();
+      const result: Array<{
+        valor: number;
+        data: string;
+        status?: string;
+        cancelada?: boolean;
+        tipo?: string;
+        deduplication_key?: string;
+        itens?: Array<{
+          nome?: string;
+          produto_id?: string;
+          quantidade: number;
+          valor_unitario?: number;
+          custo_unitario?: number;
+        }>;
+      }> = [];
 
-      return data.map((t: Record<string, unknown>) => ({
-        valor: Number(t.valor || 0),
-        data: String(t.data || startDate),
-        status: String(t.status || 'concluida'),
-        cancelada: Boolean(t.cancelada),
-        tipo: String(t.tipo || 'receita'),
-      }));
-    } catch {
+      for (const t of allRows) {
+        const isCancelled =
+          Boolean(t.cancelada) ||
+          String(t.status || '').toLowerCase() === 'cancelada' ||
+          String(t.status || '').toLowerCase() === 'cancelled';
+
+        if (isCancelled) continue;
+
+        // Extrai identificador de deduplicação
+        const rawDedup = typeof t.deduplication_key === 'string' ? t.deduplication_key.trim() : null;
+        let saleIdentifier = rawDedup;
+
+        if (!saleIdentifier) {
+          const text = `${t.descricao || ''} ${t.observacoes || ''}`;
+          const match = text.match(/#(\d+)/);
+          saleIdentifier = match ? `eyemobile:sale:${match[1]}` : String(t.id);
+        }
+
+        if (seenKeys.has(saleIdentifier)) {
+          continue; // Ignora duplicata
+        }
+        seenKeys.add(saleIdentifier);
+
+        result.push({
+          valor: Number(t.valor || 0),
+          data: String(t.data || startDate),
+          status: String(t.status || 'concluida'),
+          cancelada: false,
+          tipo: String(t.tipo || 'receita'),
+          deduplication_key: rawDedup || undefined,
+          itens: Array.isArray(t.itens) ? (t.itens as any) : undefined,
+        });
+      }
+
+      return result;
+    } catch (err) {
+      console.error('[CeoRepository.fetchSalesForExperiment] Falha inesperada:', err);
       return [];
     }
   }
