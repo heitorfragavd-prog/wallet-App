@@ -84,8 +84,11 @@ export interface StructuredBaseline {
   notes?: string;
 }
 
+export type ExperimentKpiType = 'ticket_medio' | 'faturamento' | 'pedidos' | 'produto_vendido' | 'margem';
+
 export interface AutomatedExperimentMeasurement {
   experimentId: string;
+  kpiType?: ExperimentKpiType;
   baseline: {
     indicator: string;
     value: number;
@@ -234,3 +237,83 @@ export interface SalesShiftAnalysis {
   average_ticket: number;
   items_per_ticket?: number;
 }
+
+// ==============================================================================
+// ETAPA 09 — METAS SEMANAIS E MENSAIS INTELIGENTES
+// ==============================================================================
+
+export type BusinessGoalIndicator =
+  | 'faturamento'
+  | 'pedidos'
+  | 'ticket_medio'
+  | 'despesas'
+  | 'resultado_operacional'
+  | 'margem'
+  | 'produto_categoria'
+  | 'combos';
+
+export type BusinessGoalPeriodType = 'semanal' | 'mensal';
+
+export type BusinessGoalUnit = 'BRL' | 'quantidade' | 'percentual';
+
+export type BusinessGoalStatus = 'ativa' | 'concluida' | 'pausada' | 'cancelada';
+
+export interface BusinessGoalHistoryEntry {
+  date: string;
+  action: 'created' | 'updated' | 'paused' | 'resumed' | 'concluded' | 'recalibrated';
+  user_id: string;
+  previous_target?: number;
+  new_target?: number;
+  reason?: string;
+}
+
+export interface BusinessGoal {
+  id: string;
+  workspace_id: string;
+  created_by: string;
+  titulo: string;
+  indicador: BusinessGoalIndicator;
+  periodo_tipo: BusinessGoalPeriodType;
+  data_inicio: string;
+  data_fim: string;
+  ano: number;
+  mes?: number | null;
+  semana_do_ano?: number | null;
+  valor_alvo: number;
+  valor_realizado: number;
+  unidade: BusinessGoalUnit;
+  categoria_ou_produto?: string | null;
+  eyemobile_product_id?: string | null;
+  status: BusinessGoalStatus;
+  descricao?: string | null;
+  observacoes?: string | null;
+  history: BusinessGoalHistoryEntry[];
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BusinessGoalCalculationResult {
+  goalId: string;
+  indicador: BusinessGoalIndicator;
+  periodo_tipo: BusinessGoalPeriodType;
+  data_inicio: string;
+  data_fim: string;
+  valor_alvo: number;
+  valor_realizado: number;
+  percentual_atingido: number;
+  valor_restante: number;
+  dias_totais: number;
+  dias_decorridos: number;
+  dias_restantes: number;
+  media_diaria_atual: number;
+  media_diaria_necessaria: number;
+  projecao_linear: number;
+  projecao_ajustada_dias_semana?: number | null;
+  comparativo_periodo_anterior?: {
+    valor_realizado_anterior: number;
+    delta_percent: number | null;
+  } | null;
+  status_ritmo: 'adiantado' | 'no_ritmo' | 'em_atraso' | 'critico';
+  is_periodo_fechado: boolean;
+}
+

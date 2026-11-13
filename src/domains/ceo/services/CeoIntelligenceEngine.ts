@@ -28,6 +28,7 @@ import {
   AutomatedExperimentMeasurement,
   EvaluationClassification,
   BaselineMeasurementType,
+  ExperimentKpiType,
 } from "../types";
 
 export interface BriefingSection {
@@ -632,10 +633,28 @@ export class CeoIntelligenceEngine {
   }
 
   /**
-   * Gate 3 — Medição Financeira Automática a partir de Vendas do PDV (Eyemobile / Transações)
+   * Helper para normalização de tipo de KPI a partir de texto livre ou valor canônico
+   */
+  public static resolveKpiType(raw?: string | null): ExperimentKpiType {
+    const text = String(raw || '').toLowerCase().trim();
+    if (text.includes('ticket')) return 'ticket_medio';
+    if (text.includes('pedido') || text.includes('transa') || text.includes('volume')) return 'pedidos';
+    if (text.includes('produto') || text.includes('item') || text.includes('unidade')) return 'produto_vendido';
+    if (text.includes('margem')) return 'margem';
+    return 'faturamento';
+  }
+
+  /**
+   * Gate 3 & Gate 1 — Medição Automática de Experimentos Comerciais a partir de Vendas do PDV
+   * Suporta 5 tipos de KPIs oficiais:
+   * 1. ticket_medio: Variação de valor médio por pedido
+   * 2. faturamento: Variação de receita média diária
+   * 3. pedidos: Variação de volume de pedidos diários
+   * 4. produto_vendido: Variação de quantidade de item vendido do catálogo Eyemobile
+   * 5. margem: Variação de margem bruta/operacional em %
    *
    * Requisitos:
-   * 1. Desconsiderar vendas canceladas.
+   * 1. Desconsiderar vendas canceladas ou estornadas.
    * 2. Comparar período do experimento com baseline histórico.
    * 3. Apresentar resultado financeiro medido, variação percentual real e observações analisadas.
    * 4. Diferenciar medição automática comprovada de manual e estimada.
@@ -648,12 +667,23 @@ export class CeoIntelligenceEngine {
       status?: string;
       cancelada?: boolean;
       tipo?: string;
+      custo?: number;
+      itens?: Array<{
+        nome?: string;
+        produto_id?: string;
+        quantidade: number;
+        valor_unitario?: number;
+        custo_unitario?: number;
+      }>;
     }>;
     baselineDailyAverage?: number;
     baselineSampleSize?: number;
     baselinePeriod?: string;
     experimentDaysCount?: number;
     measurementType?: BaselineMeasurementType;
+    kpiType?: ExperimentKpiType | string;
+    targetProductName?: string;
+    targetProductId?: string;
   }): AutomatedExperimentMeasurement {
     const {
       experiment,
@@ -663,7 +693,14 @@ export class CeoIntelligenceEngine {
       baselinePeriod = 'Período de referência histórico',
       experimentDaysCount,
       measurementType = 'automatica',
+      kpiType,
+      targetProductName,
+      targetProductId,
     } = params;
+
+    const resolvedKpiType: ExperimentKpiType = kpiType
+      ? CeoIntelligenceEngine.resolveKpiType(kpiType)
+      : CeoIntelligenceEngine.resolveKpiType(experiment.target_kpi);
 
     // 1. Desconsiderar vendas canceladas ou estornadas
     const validSales = (sales || []).filter((s) => {
@@ -682,15 +719,138 @@ export class CeoIntelligenceEngine {
     const calculatedDays = distinctDates.size;
     const daysCount = Math.max(1, experimentDaysCount || calculatedDays || 1);
 
-    const currentDailyAverage = Math.round((totalRevenue / daysCount) * 100) / 100;
-    const deltaAbs = Math.round((currentDailyAverage - baselineDailyAverage) * 100) / 100;
-
+    // Variáveis por KPI
+    let currentValue = 0;
+    let indicatorName = experiment.target_kpi || 'Faturamento Diário';
+    let deltaAbs = 0;
     let deltaPercent: number | null = null;
-    if (baselineDailyAverage > 0) {
-      deltaPercent = Math.round(((currentDailyAverage - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
-    }
+    let financialImpact = 0;
+    let hasAnyCostReported = true;
 
-    const financialImpact = Math.round(deltaAbs * daysCount * 100) / 100;
+    switch (resolvedKpiType) {
+      case 'ticket_medio': {
+        indicatorName = experiment.target_kpi || 'Ticket Médio';
+        currentValue = averageTicket;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+        financialImpact = Math.round(deltaAbs * sampleSize * 100) / 100;
+        break;
+      }
+
+      case 'pedidos': {
+        indicatorName = experiment.target_kpi || 'Pedidos por Dia';
+        currentValue = Math.round((sampleSize / daysCount) * 100) / 100;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+        financialImpact = Math.round(deltaAbs * daysCount * averageTicket * 100) / 100;
+        break;
+      }
+
+      case 'produto_vendido': {
+        indicatorName =
+          experiment.target_kpi ||
+          (targetProductName ? `Vendas de ${targetProductName}` : 'Produtos Vendidos por Dia');
+
+        let totalProductQty = 0;
+        let totalProductRevenue = 0;
+
+        for (const s of validSales) {
+          if (s.itens && s.itens.length > 0) {
+            for (const it of s.itens) {
+              const matchName = targetProductName
+                ? (it.nome || '').toLowerCase().includes(targetProductName.toLowerCase())
+                : false;
+              const matchId = targetProductId ? it.produto_id === targetProductId : false;
+
+              if (matchName || matchId || (!targetProductName && !targetProductId)) {
+                totalProductQty += Number(it.quantidade || 0);
+                totalProductRevenue += Number(it.quantidade || 0) * Number(it.valor_unitario || 0);
+              }
+            }
+          }
+        }
+
+        if (totalProductQty === 0 && !targetProductName && !targetProductId) {
+          totalProductQty = sampleSize;
+        }
+
+        currentValue = Math.round((totalProductQty / daysCount) * 100) / 100;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+
+        const avgPrice =
+          totalProductQty > 0 && totalProductRevenue > 0
+            ? totalProductRevenue / totalProductQty
+            : averageTicket;
+        financialImpact = Math.round(deltaAbs * daysCount * avgPrice * 100) / 100;
+        break;
+      }
+
+      case 'margem': {
+        indicatorName = experiment.target_kpi || 'Margem Operacional (%)';
+        let revenueWithKnownCost = 0;
+        let totalCost = 0;
+        hasAnyCostReported = false;
+
+        for (const s of validSales) {
+          if (s.custo != null && Number.isFinite(s.custo) && s.custo > 0) {
+            hasAnyCostReported = true;
+            revenueWithKnownCost += Number(s.valor || 0);
+            totalCost += Number(s.custo);
+          } else if (s.itens && s.itens.length > 0) {
+            let itemCostSum = 0;
+            let itemHasCost = false;
+            for (const it of s.itens) {
+              if (it.custo_unitario != null && Number.isFinite(it.custo_unitario) && it.custo_unitario > 0) {
+                itemHasCost = true;
+                itemCostSum += Number(it.custo_unitario) * Number(it.quantidade || 1);
+              }
+            }
+            if (itemHasCost) {
+              hasAnyCostReported = true;
+              revenueWithKnownCost += Number(s.valor || 0);
+              totalCost += itemCostSum;
+            }
+          }
+        }
+
+        // Se nenhuma venda possui custo cadastrado, não inventa margem nem trata custo como zero
+        let currentMarginPercent = 0;
+        if (!hasAnyCostReported || revenueWithKnownCost === 0) {
+          currentMarginPercent = 0;
+        } else {
+          currentMarginPercent =
+            Math.round(((revenueWithKnownCost - totalCost) / revenueWithKnownCost) * 1000) / 10;
+        }
+
+        currentValue = currentMarginPercent;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+
+        financialImpact = Math.round(((deltaAbs / 100) * totalRevenue) * 100) / 100;
+        break;
+      }
+
+      case 'faturamento':
+      default: {
+        indicatorName = experiment.target_kpi || 'Faturamento Diário';
+        currentValue = Math.round((totalRevenue / daysCount) * 100) / 100;
+        deltaAbs = Math.round((currentValue - baselineDailyAverage) * 100) / 100;
+        if (baselineDailyAverage > 0) {
+          deltaPercent = Math.round(((currentValue - baselineDailyAverage) / baselineDailyAverage) * 1000) / 10;
+        }
+        financialImpact = Math.round(deltaAbs * daysCount * 100) / 100;
+        break;
+      }
+    }
 
     // Suficiência estatística: mínimo 3 dias com vendas ou mínimo 5 pedidos
     const isStatisticallySufficient = calculatedDays >= 3 || sampleSize >= 5;
@@ -701,27 +861,32 @@ export class CeoIntelligenceEngine {
     if (sampleSize === 0) {
       classification = 'dados_indisponiveis';
       notes = 'Nenhuma venda confirmada registrada no período do experimento.';
+    } else if (resolvedKpiType === 'margem' && !hasAnyCostReported) {
+      classification = 'dados_indisponiveis';
+      notes =
+        'Vendas identificadas no período, porém sem fichas técnicas ou custos de mercadorias confirmados. Margem não pode ser apurada com custo zero fictício.';
     } else if (!isStatisticallySufficient) {
       classification = 'inconcluso';
       notes = `Amostra preliminar (${sampleSize} vendas em ${calculatedDays} dias). Necessário maior período para relevância estatística.`;
     } else if (deltaAbs > 0) {
       classification = 'favoravel';
-      notes = `Resultado favorável com impacto financeiro incremental medido de R$ ${financialImpact.toFixed(2)}.`;
+      notes = `Resultado favorável em ${indicatorName} com impacto financeiro incremental medido de R$ ${financialImpact.toFixed(2)}.`;
     } else {
       classification = 'desfavoravel';
-      notes = `Resultado desfavorável com variação diária de R$ ${deltaAbs.toFixed(2)} em relação ao baseline.`;
+      notes = `Resultado desfavorável em ${indicatorName} com variação de ${deltaAbs > 0 ? '+' : ''}${deltaAbs} em relação ao baseline.`;
     }
 
     return {
       experimentId: experiment.id,
+      kpiType: resolvedKpiType,
       baseline: {
-        indicator: experiment.target_kpi || 'Faturamento Diário',
+        indicator: indicatorName,
         value: baselineDailyAverage,
         sampleSize: baselineSampleSize,
         period: baselinePeriod,
       },
       measurement: {
-        currentValue: currentDailyAverage,
+        currentValue,
         sampleSize,
         period: `${experiment.start_date} até o momento (${daysCount} dias operacionais)`,
         totalRevenue,
