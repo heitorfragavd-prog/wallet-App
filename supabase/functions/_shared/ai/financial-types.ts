@@ -270,3 +270,25 @@ export interface OperationalReminderRecord {
   createdAt: string;
 }
 
+export interface BusinessGoalRecord {
+  id: string;
+  workspaceId: string;
+  titulo: string;
+  indicador: string;
+  periodoTipo: string;
+  dataInicio: string;
+  dataFim: string;
+  ano: number;
+  mes: number | null;
+  semanaDoAno: number | null;
+  valorAlvo: number;
+  valorRealizado: number;
+  unidade: string;
+  status: string;
+  categoriaOuProduto: string | null;
+  eyemobileProductId: string | null;
+  observacoes: string | null;
+  createdAt: string;
+}
+
+

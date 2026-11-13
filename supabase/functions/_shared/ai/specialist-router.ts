@@ -34,6 +34,7 @@ import type {
   CommercialExperimentRecord,
   CashClosingRecord,
   OperationalReminderRecord,
+  BusinessGoalRecord,
 } from "./query-tools.ts";
 import type { CanonicalFinancialRecord } from "./financial-types.ts";
 import { buildFinancialSummary } from "./financial-core.ts";
@@ -460,10 +461,20 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("saldo atual") ||
     p.includes("situacao do meu saldo") ||
     p.includes("situação do meu saldo") ||
-    p.includes("fluxo de caixa");
+    p.includes("fluxo de caixa") ||
+    p.includes("meta desta semana") ||
+    p.includes("meta da semana") ||
+    p.includes("meta do mês") ||
+    p.includes("meta do mes") ||
+    p.includes("quanto falta para bater a meta") ||
+    p.includes("como está nossa meta") ||
+    p.includes("como esta nossa meta") ||
+    p.includes("ritmo da meta");
 
   const isFinancialTerms =
     isFinancialDirect ||
+    p.includes("meta") ||
+    p.includes("metas") ||
     p.includes("faturamento") ||
     p.includes("faturou") ||
     p.includes("faturei") ||
@@ -555,6 +566,7 @@ export interface FinancialDeterministicData {
   saldoTotal?: number | null;
   resultadoOperacionalMes?: number | null;
   despesasMes?: number | null;
+  goals?: BusinessGoalRecord[];
 }
 
 export function buildFinancialSpecialistDeterministicResponse(
@@ -648,6 +660,58 @@ export function buildFinancialSpecialistDeterministicResponse(
       `• *Despesas Acumuladas no Mês:* ${despMesStr}\n` +
       `• *Resultado Operacional Preliminar:* ${resOpStr}\n\n` +
       `_Posição consolidada das contas bancárias e conciliação em tempo real._`;
+
+    return { handled: true, answer: msg, specialist: "financeiro" };
+  }
+
+  // Caso D: "Como está nossa meta desta semana / meta do mês / quanto falta para bater a meta?"
+  if (
+    p.includes("meta") ||
+    p.includes("metas") ||
+    p.includes("bater a meta") ||
+    p.includes("ritmo da meta")
+  ) {
+    const goals = data.goals ?? [];
+    if (goals.length === 0) {
+      const msg =
+        `🎯 *Agente Financeiro — Metas Empresariais:*\n\n` +
+        `Não há nenhuma meta empresarial ativa cadastrada para este workspace no momento.\n` +
+        `Você pode definir metas semanais ou mensais diretamente na aba *Metas & Desempenho* do Wallet CEO.`;
+      return { handled: true, answer: msg, specialist: "financeiro" };
+    }
+
+    const isSemanal = p.includes("semana") || p.includes("semanal");
+    const isMensal = p.includes("mês") || p.includes("mes") || p.includes("mensal");
+
+    const targetGoal =
+      goals.find((g) => {
+        if (isSemanal) return g.periodoTipo === "semanal";
+        if (isMensal) return g.periodoTipo === "mensal";
+        return true;
+      }) ?? goals[0];
+
+    const pct = targetGoal.valorAlvo > 0 ? (targetGoal.valorRealizado / targetGoal.valorAlvo) * 100 : 0;
+    const restante = Math.max(0, targetGoal.valorAlvo - targetGoal.valorRealizado);
+
+    const formatVal = (v: number) => {
+      if (targetGoal.unidade === "monetario") return `R$ ${v.toFixed(2)}`;
+      if (targetGoal.unidade === "percentual") return `${v.toFixed(1)}%`;
+      return `${v} un`;
+    };
+
+    let msg =
+      `🎯 *Agente Financeiro — Acompanhamento de Metas:*\n\n` +
+      `• *Meta:* ${targetGoal.titulo} (${targetGoal.indicador})\n` +
+      `• *Período:* ${targetGoal.periodoTipo === "semanal" ? "Semanal" : "Mensal"} (${targetGoal.dataInicio} a ${targetGoal.dataFim})\n` +
+      `• *Alvo:* ${formatVal(targetGoal.valorAlvo)}\n` +
+      `• *Realizado:* ${formatVal(targetGoal.valorRealizado)} (${pct.toFixed(1)}%)\n` +
+      `• *Restante para Bater:* ${formatVal(restante)}\n`;
+
+    if (pct >= 100) {
+      msg += `\n🏆 *Status:* Meta batida com sucesso! Parabéns a toda a operação!`;
+    } else {
+      msg += `\n📌 *Status:* Em andamento. Acompanhe a projeção ajustada e o ritmo na aba *Metas & Desempenho*.`;
+    }
 
     return { handled: true, answer: msg, specialist: "financeiro" };
   }
@@ -762,6 +826,19 @@ export async function fetchAndExecuteFinancialSpecialist(
       });
       collectedData.despesasMes = expenses.reduce((acc, e) => acc + (e.amount || 0), 0);
       collectedData.resultadoOperacionalMes = (collectedData.faturamentoMes || 0) - (collectedData.despesasMes || 0);
+    }
+
+    // 4. Caso Metas Empresariais
+    if (
+      p.includes("meta") ||
+      p.includes("metas") ||
+      p.includes("bater a meta") ||
+      p.includes("ritmo da meta")
+    ) {
+      if (repository.listBusinessGoals) {
+        const goals = await repository.listBusinessGoals(context, { status: "ativa" });
+        collectedData.goals = goals;
+      }
     }
   } catch (err) {
     console.warn("[specialist-router] Erro ao consultar repositório financeiro para resposta determinística:", err);
@@ -3380,12 +3457,23 @@ async function collectSingleSpecialistContribution(
       const revStr = formatMoneyOrUnavailable(summary.operationalIncome);
       const expStr = formatMoneyOrUnavailable(summary.operationalExpenses);
       const netStr = formatMoneyOrUnavailable(summary.netOperationalResult);
+
+      let goalsBrief = "";
+      if (repository.listBusinessGoals) {
+        const goals = await repository.listBusinessGoals(context, { status: "ativa" });
+        const weeklyGoal = goals.find((g) => g.periodoTipo === "semanal");
+        if (weeklyGoal) {
+          const pct = weeklyGoal.valorAlvo > 0 ? ((weeklyGoal.valorRealizado / weeklyGoal.valorAlvo) * 100).toFixed(1) : "0";
+          goalsBrief = ` | Meta Semanal (${weeklyGoal.indicador}): ${pct}% atingido (Alvo: ${formatMoneyOrUnavailable(weeklyGoal.valorAlvo)})`;
+        }
+      }
+
       return {
         specialist: specialistId,
         name,
         status: "ok",
         durationMs: Date.now() - startedAt,
-        summary: `Mês (${dates.startOfMonthStr} a ${dates.todayStr}): Receita operacional ${revStr} | Despesas operacionais ${expStr} | Resultado líquido ${netStr} | Vencidas: ${overdue.length} (${formatMoneyOrUnavailable(overdueSum)}) | A vencer: ${pending.length} (${formatMoneyOrUnavailable(pendingSum)}).`,
+        summary: `Mês (${dates.startOfMonthStr} a ${dates.todayStr}): Receita operacional ${revStr} | Despesas operacionais ${expStr} | Resultado líquido ${netStr} | Vencidas: ${overdue.length} (${formatMoneyOrUnavailable(overdueSum)}) | A vencer: ${pending.length} (${formatMoneyOrUnavailable(pendingSum)})${goalsBrief}.`,
       };
     }
 
