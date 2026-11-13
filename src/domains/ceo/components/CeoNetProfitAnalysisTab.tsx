@@ -437,7 +437,7 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">(-) Pessoal / Serviços Pagos:</span>
-              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasOperacionaisPagas ?? 2767.48)})</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasOperacionaisPagas ?? 0)})</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">(-) Boletos & Compras de Estoque:</span>
@@ -445,7 +445,7 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">(-) Tarifas Bancárias:</span>
-              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasFinanceirasPagas ?? 52.50)})</span>
+              <span className="font-mono text-rose-400">({formatCurrency(relatorio?.visaoCaixa?.saidasFinanceirasPagas ?? 0)})</span>
             </div>
             <div className="border-t border-blue-500/20 pt-2 flex justify-between font-bold text-sm">
               <span className="text-blue-400">(=) Saldo Operacional de Caixa:</span>
@@ -485,15 +485,15 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                 </div>
                 <div className="flex justify-between text-muted-foreground pt-1 border-t border-purple-500/10">
                   <span>Obrigações Agendadas a Vencer:</span>
-                  <span className="font-mono text-foreground font-semibold">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 11289.49)}</span>
+                  <span className="font-mono text-foreground font-semibold">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 0)}</span>
                 </div>
                 <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
-                  <span>• Pró-labores (25/11):</span>
-                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 10000)}</span>
+                  <span>• Pró-labores:</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 0)}</span>
                 </div>
                 <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
-                  <span>• Acertos de Equipe (09/11):</span>
-                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 937.49)}</span>
+                  <span>• Acertos de Equipe:</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 0)}</span>
                 </div>
               </div>
             ) : (
@@ -504,15 +504,15 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Obrigações Agendadas a Vencer:</span>
-                  <span className="font-mono text-muted-foreground">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 11289.49)}</span>
+                  <span className="font-mono text-muted-foreground">{formatCurrency(relatorio?.resultadoProjetadoMes?.obrigacoesFuturasAgendadas ?? 0)}</span>
                 </div>
                 <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
-                  <span>• Pró-labores (25/11):</span>
-                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 10000)}</span>
+                  <span>• Pró-labores:</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.proLabores ?? 0)}</span>
                 </div>
                 <div className="flex justify-between pl-2 text-[11px] text-muted-foreground">
-                  <span>• Acertos de Equipe (09/11):</span>
-                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 937.49)}</span>
+                  <span>• Acertos de Equipe:</span>
+                  <span className="font-mono">{formatCurrency(relatorio?.obrigacoesFuturas?.acertosEquipe ?? 0)}</span>
                 </div>
                 <div className="border-t border-purple-500/20 pt-2 flex justify-between font-bold text-sm">
                   <span className="text-purple-400">(=) Resultado Líquido Projetado:</span>
@@ -725,16 +725,16 @@ export const CeoNetProfitAnalysisTab: React.FC<CeoNetProfitAnalysisTabProps> = (
                       </span>
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      * Segregados da despesa operacional na DRE por competência para evitar dupla dedução com o CMV dos produtos quando vendidos (R$ 2.665,00 em compras diretas de revenda + boletos de atacado).
+                      * Segregados da despesa operacional na DRE por competência para evitar dupla dedução com o CMV dos produtos quando vendidos.
                     </p>
                     <div className="flex items-center justify-between text-[11px] pt-1 border-t border-border/20">
                       <span>⏳ <strong>Obrigações Futuras Agendadas do Mês (Pró-labores & Acertos a Vencer):</strong></span>
                       <span className="font-mono font-bold text-amber-400">
-                        {formatCurrency(relatorio?.obrigacoesFuturas?.total ?? 11289.49)}
+                        {formatCurrency(relatorio?.obrigacoesFuturas?.total ?? 0)}
                       </span>
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      * Pró-labores de 25/11 (R$ 10.000,00) e acertos da equipe agendados não reduzem o resultado realizado dos primeiros dias do mês.
+                      * Obrigações futuras e acertos agendados por competência não reduzem o resultado realizado antes de seus respectivos vencimentos.
                     </p>
                   </td>
                 </tr>
