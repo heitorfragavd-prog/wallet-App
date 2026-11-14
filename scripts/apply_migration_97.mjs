@@ -1,75 +1,58 @@
 import fs from 'fs';
-import https from 'https';
+import path from 'path';
 
-const token = fs.readFileSync('C:/Users/Heitor/.supabase/mcp-token.txt', 'utf8').trim();
+const projectRef = 'hdeguzxkdvebdrrutbnx';
+const mcpTokenPath = 'C:\\Users\\Heitor\\.supabase\\mcp-token.txt';
 
-function runQuery(sql) {
-  return new Promise((resolve, reject) => {
-    const data = JSON.stringify({ query: sql });
-    const req = https.request({
-      hostname: 'api.supabase.com',
-      port: 443,
-      path: '/v1/projects/hdeguzxkdvebdrrutbnx/database/query',
-      method: 'POST',
-      family: 4,
-      headers: {
-        'Authorization': 'Bearer ' + token,
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(data)
-      },
-      timeout: 60000
-    }, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => {
-        try { resolve(JSON.parse(body)); } catch { resolve(body); }
-      });
-    });
-    req.on('error', reject);
-    req.write(data);
-    req.end();
+if (!fs.existsSync(mcpTokenPath)) {
+  console.error('Token MCP não encontrado em:', mcpTokenPath);
+  process.exit(1);
+}
+
+const token = fs.readFileSync(mcpTokenPath, 'utf8').trim();
+
+const migrationPath = path.resolve('supabase/migrations/97_workspace_whatsapp_integrations.sql');
+const sql = fs.readFileSync(migrationPath, 'utf8');
+
+console.log('Aplicando Migration 97 no projeto Supabase:', projectRef);
+
+async function run() {
+  const url = `https://api.supabase.com/v1/projects/${projectRef}/database/query`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({ query: sql })
   });
+
+  if (!res.ok) {
+    const errorText = await res.text();
+    console.error('Erro ao executar migration 97:', res.status, errorText);
+    process.exit(1);
+  }
+
+  const data = await res.json();
+  console.log('Migration 97 aplicada com sucesso!', data);
+
+  // Verificação da existência das tabelas criadas
+  const verifyRes = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify({
+      query: `SELECT table_name FROM information_schema.tables WHERE table_schema = 'public' AND table_name IN ('workspace_whatsapp_integrations', 'whatsapp_usuarios_pareados', 'whatsapp_mensagens_processadas');`
+    })
+  });
+
+  const verifyData = await verifyRes.json();
+  console.log('Tabelas verificadas no Supabase:', verifyData);
 }
 
-async function main() {
-  console.log("=== APLICANDO MIGRATION 97: UNIFICAR GRUPOS DE FECHAMENTO & HARDENING AUTOMACOES ===");
-  const migrationSql = fs.readFileSync('supabase/migrations/97_unificar_grupos_fechamento_e_hardening_automacoes.sql', 'utf8');
-
-  const result = await runQuery(migrationSql);
-  console.log("Resultado da execução:", JSON.stringify(result, null, 2));
-
-  console.log("\n--- VERIFICAÇÃO 1: GRUPOS ATIVOS EM TELEGRAM_GRUPOS_CONFIG ---");
-  const verifyGrupos = await runQuery(`
-    SELECT id, nome_grupo, tipo_grupo, chat_id, ativo, created_at
-    FROM public.telegram_grupos_config
-    WHERE workspace_id = '2af415b6-76aa-4134-8133-a9b405671c1c'
-    ORDER BY created_at ASC;
-  `);
-  console.log(JSON.stringify(verifyGrupos, null, 2));
-
-  console.log("\n--- VERIFICAÇÃO 2: FECHAMENTOS_CAIXA VINCULADOS AO GRUPO CANÔNICO ---");
-  const verifyFechamentos = await runQuery(`
-    SELECT id, chat_id, data_fechamento, grupo_id, status
-    FROM public.fechamentos_caixa
-    WHERE chat_id = -1004384150943;
-  `);
-  console.log(JSON.stringify(verifyFechamentos, null, 2));
-
-  console.log("\n--- VERIFICAÇÃO 3: COLUNAS EM ESCALAS_AUTOMACOES_LOG ---");
-  const verifyCols = await runQuery(`
-    SELECT column_name, data_type, column_default
-    FROM information_schema.columns
-    WHERE table_name = 'escalas_automacoes_log' AND column_name IN ('status_envio', 'telegram_message_id', 'api_response', 'tentativas', 'erro_detalhes');
-  `);
-  console.log(JSON.stringify(verifyCols, null, 2));
-
-  console.log("\n--- VERIFICAÇÃO 4: JOBS AGENDADOS NO PG_CRON ---");
-  const verifyCron = await runQuery(`
-    SELECT jobid, schedule, command, active
-    FROM cron.job
-    WHERE jobname IN ('folguistas-consulta-segunda', 'folguistas-confirmacao-sexta');
-  `);
-  console.log(JSON.stringify(verifyCron, null, 2));
-}
-
-main().catch(console.error);
+run().catch((err) => {
+  console.error('Falha geral:', err);
+  process.exit(1);
+});
