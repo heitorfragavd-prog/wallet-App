@@ -308,6 +308,7 @@ export interface TelegramApiClient {
   }): Promise<{ ok?: boolean }>;
   downloadFileAsBase64(fileId: string): Promise<{ base64: string; mimeType?: string; size?: number } | null>;
   transcribeAudio?(fileId: string, mimeType?: string): Promise<string | null>;
+  sendChatAction?(chatId: string | number, action: string): Promise<void>;
 }
 
 export function createDefaultTelegramApiClient(
@@ -315,6 +316,18 @@ export function createDefaultTelegramApiClient(
   openaiApiKey?: string,
 ): TelegramApiClient {
   return {
+    async sendChatAction(chatId: string | number, action: string) {
+      try {
+        await fetch(`https://api.telegram.org/bot${botToken}/sendChatAction`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ chat_id: chatId, action }),
+        });
+      } catch {
+        // Ignora erro em status efêmero
+      }
+    },
+
     async sendMessage({ chatId, text, parseMode = "HTML", inlineKeyboard }) {
       const body: Record<string, unknown> = {
         chat_id: chatId,
@@ -3005,9 +3018,42 @@ export async function processTelegramUpdate(
     // C: Áudio / Voz (Whisper)
     if (msg.voice || msg.audio) {
       const audio = msg.voice || msg.audio;
+
+      // Validação de permissões de grupo antes de gastar recursos de transcrição
+      if (identity.grupo && !identity.grupo.permissoes.enviar_mensagens) {
+        await api.sendMessage({
+          chatId,
+          text: "🔒 Você possui apenas permissão de leitura ou não está autorizado a enviar mensagens neste grupo.",
+          parseMode: "HTML",
+        });
+        return { handled: true, error: "GROUP_PERMISSION_DENIED" };
+      }
+
       if (audio?.file_id && api.transcribeAudio) {
-        const transcript = await api.transcribeAudio(audio.file_id, audio.mime_type);
-        if (transcript) {
+        if (api.sendChatAction) {
+          await api.sendChatAction(chatId, "record_voice").catch(() => {});
+        }
+
+        const rawTranscript = await api.transcribeAudio(audio.file_id, audio.mime_type);
+        const transcript = rawTranscript?.trim();
+
+        if (transcript && transcript.length > 0) {
+          // Telemetria persistida em audio_transcricoes quando cliente de banco disponível
+          if (deps.supabase) {
+            try {
+              await deps.supabase.from("audio_transcricoes").insert({
+                user_id: identity.userId,
+                chat_id: typeof chatId === "number" ? chatId : parseInt(String(chatId), 10) || null,
+                file_id: audio.file_id,
+                duracao_segundos: audio.duration ?? null,
+                transcricao: transcript,
+                sucesso: true,
+              });
+            } catch (telemetryErr) {
+              console.warn("[telegram-adapter] Falha não bloqueante ao registrar telemetria de áudio:", telemetryErr);
+            }
+          }
+
           const textResult = await handleTelegramTextMessage(
             {
               text: transcript,
@@ -3028,6 +3074,29 @@ export async function processTelegramUpdate(
           });
 
           return { handled: true, result: textResult };
+        } else {
+          // Trata áudio inaudível, falha no Whisper ou resposta em branco
+          if (deps.supabase) {
+            try {
+              await deps.supabase.from("audio_transcricoes").insert({
+                user_id: identity.userId,
+                chat_id: typeof chatId === "number" ? chatId : parseInt(String(chatId), 10) || null,
+                file_id: audio.file_id,
+                duracao_segundos: audio.duration ?? null,
+                sucesso: false,
+              });
+            } catch {
+              // Silencioso
+            }
+          }
+
+          await api.sendMessage({
+            chatId,
+            text: "⚠️ <b>Não foi possível compreender o áudio.</b>\nPor favor, tente falar mais próximo ao microfone, evite ruídos de fundo ou digite sua mensagem.",
+            parseMode: "HTML",
+          });
+
+          return { handled: true, error: "AUDIO_TRANSCRIPTION_FAILED" };
         }
       }
     }
