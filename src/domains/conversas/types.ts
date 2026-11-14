@@ -57,8 +57,8 @@ export interface ConversaRecord {
   is_shared: boolean;
   is_group: boolean;
   is_archived: boolean;
-  channel: "web" | "telegram";
-  last_channel: "web" | "telegram";
+  channel: "web" | "telegram" | "whatsapp";
+  last_channel: "web" | "telegram" | "whatsapp";
   external_chat_id: string | null;
   processing_status: "idle" | "processing" | "awaiting_confirmation" | "error";
   last_message_preview: string | null;
@@ -74,7 +74,7 @@ export interface ConversaMessage {
   user_id: string;
   role: "user" | "assistant" | "system" | "tool";
   content: string | null;
-  channel: "web" | "telegram";
+  channel: "web" | "telegram" | "whatsapp";
   external_message_id: string | null;
   sender_name: string | null;
   sender_role: string | null;
@@ -83,6 +83,47 @@ export interface ConversaMessage {
   attachment_mime: string | null;
   attachment_name: string | null;
   metadata?: Record<string, unknown> | null;
+  created_at: string;
+}
+
+export interface WhatsAppIntegration {
+  id: string;
+  workspace_id: string;
+  phone_number_id: string;
+  waba_id?: string | null;
+  display_phone_number?: string | null;
+  verified_name?: string | null;
+  quality_rating?: string;
+  status: "pending" | "active" | "suspended" | "error";
+  webhook_verify_token: string;
+  created_by?: string | null;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface WhatsAppPairedUser {
+  id: string;
+  workspace_id: string;
+  user_id: string;
+  phone_number: string;
+  nome_contato?: string | null;
+  role_no_workspace: "owner" | "admin" | "member";
+  autorizado_por?: string | null;
+  ativo: boolean;
+  created_at: string;
+  updated_at?: string;
+}
+
+export interface WhatsAppMessageProcessed {
+  id: string;
+  workspace_id: string;
+  whatsapp_message_id: string;
+  from_phone: string;
+  to_phone_number_id: string;
+  tipo_mensagem: string;
+  status_processamento: "received" | "processed" | "ignored" | "duplicate" | "error";
+  idempotency_hash: string;
+  erro?: string | null;
   created_at: string;
 }
 
