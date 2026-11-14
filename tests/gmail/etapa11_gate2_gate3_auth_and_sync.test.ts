@@ -3,6 +3,21 @@ import { GmailIntegrationService } from '../../src/domains/gmail/services/GmailI
 import fs from 'node:fs';
 import path from 'node:path';
 
+vi.mock('../../src/integrations/supabase/client', () => ({
+  supabase: {
+    auth: {
+      getSession: vi.fn(),
+    },
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null }),
+    }),
+  },
+}));
+
 describe('👑 WALLET CEO 3.0 — Etapa 11 (Gates 1, 2 e 3): Conexão Gmail e Sincronização Incremental', () => {
   beforeEach(() => {
     vi.clearAllMocks();
