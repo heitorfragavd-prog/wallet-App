@@ -6,9 +6,11 @@ import { ConversaThreadView } from "@/domains/conversas/components/ConversaThrea
 import { ConversaDetailPanel } from "@/domains/conversas/components/ConversaDetailPanel";
 import { GerenciarGruposModal } from "@/domains/conversas/components/GerenciarGruposModal";
 import { useCentralConversas } from "@/domains/conversas/hooks/useCentralConversas";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { cn } from "@/lib/utils";
 
 const CentralConversasPage: React.FC = () => {
+  const { currentWorkspace } = useWorkspace();
   const {
     isExecutiveUser,
     loadingThreads,
@@ -164,6 +166,7 @@ const CentralConversasPage: React.FC = () => {
         <GerenciarGruposModal
           open={manageModalOpen}
           initialGroupId={manageInitialGroupId}
+          workspaceId={currentWorkspace?.id}
           onOpenChange={setManageModalOpen}
           grupos={grupos}
           participantes={participantes}

@@ -11,7 +11,9 @@ import {
   Trash2,
   UserPlus,
   Users,
+  Smartphone,
 } from "lucide-react";
+import { WhatsAppIntegrationCard } from "./WhatsAppIntegrationCard";
 import {
   Dialog,
   DialogContent,
@@ -51,6 +53,7 @@ import { cn } from "@/lib/utils";
 interface GerenciarGruposModalProps {
   open: boolean;
   initialGroupId?: string | null;
+  workspaceId?: string;
   onOpenChange: (open: boolean) => void;
   grupos: GrupoConfig[];
   participantes: GrupoParticipante[];
@@ -92,6 +95,7 @@ const ROLE_PERMISSION_PRESETS: Record<
 export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
   open,
   initialGroupId,
+  workspaceId,
   onOpenChange,
   grupos,
   participantes,
@@ -102,6 +106,7 @@ export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
   onSaveParticipant,
   onRemoveParticipant,
 }) => {
+  const [modalTab, setModalTab] = useState<"grupos" | "whatsapp">("grupos");
   const [selectedGroupId, setSelectedGroupId] = useState<string | "new">("new");
   const [nomeGrupo, setNomeGrupo] = useState("");
   const [tipoGrupo, setTipoGrupo] = useState<OperationalGroupType>("fechamento");
@@ -295,7 +300,35 @@ export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-4 pt-2">
+        <div className="flex items-center gap-2 border-b border-border/50 pb-2.5 pt-1">
+          <Button
+            type="button"
+            size="sm"
+            variant={modalTab === "grupos" ? "default" : "outline"}
+            onClick={() => setModalTab("grupos")}
+            className="text-xs h-7 gap-1.5"
+          >
+            <Users className="w-3.5 h-3.5" />
+            Grupos & Telegram
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant={modalTab === "whatsapp" ? "default" : "outline"}
+            onClick={() => setModalTab("whatsapp")}
+            className="text-xs h-7 gap-1.5"
+          >
+            <Smartphone className="w-3.5 h-3.5 text-emerald-400" />
+            WhatsApp Business (Cloud API)
+          </Button>
+        </div>
+
+        {modalTab === "whatsapp" ? (
+          <div className="pt-3">
+            <WhatsAppIntegrationCard workspaceId={workspaceId || grupos[0]?.workspace_id || ""} />
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-12 gap-4 pt-2">
           {/* Lista de grupos */}
           <div className="md:col-span-4 space-y-2 border-b md:border-b-0 md:border-r border-border/60 pb-3 md:pb-0 md:pr-3">
             <Button
@@ -696,6 +729,7 @@ export const GerenciarGruposModal: React.FC<GerenciarGruposModalProps> = ({
             )}
           </div>
         </div>
+        )}
       </DialogContent>
     </Dialog>
   );
