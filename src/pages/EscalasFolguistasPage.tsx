@@ -8,6 +8,7 @@ import {
   Users,
   CheckCircle2,
   RefreshCw,
+  Bot,
 } from "lucide-react";
 import { DashboardLayout } from "@/shared/components/layouts/DashboardLayout";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/shared/components/ui/tabs";
@@ -20,6 +21,7 @@ import { FolguistasTab } from "@/domains/escalas/components/tabs/FolguistasTab";
 import { DisponibilidadesTab } from "@/domains/escalas/components/tabs/DisponibilidadesTab";
 import { HistoricoTab } from "@/domains/escalas/components/tabs/HistoricoTab";
 import { ConfiguracoesTab } from "@/domains/escalas/components/tabs/ConfiguracoesTab";
+import { AutomacoesSemanaisTab } from "@/domains/escalas/components/tabs/AutomacoesSemanaisTab";
 
 export default function EscalasFolguistasPage() {
   const [activeTab, setActiveTab] = useState<string>("proximo-fim-de-semana");
@@ -44,6 +46,8 @@ export default function EscalasFolguistasPage() {
     refetchAll,
   } = useEscalasFolguistas();
 
+  const workspaceId = config?.workspace_id || colaboradores[0]?.workspace_id || "";
+
   return (
     <DashboardLayout>
       <div className="space-y-6">
@@ -56,7 +60,7 @@ export default function EscalasFolguistasPage() {
               </h1>
               <Badge variant="outline" className="text-xs bg-purple-500/10 text-purple-400 border-purple-500/30 gap-1">
                 <Sparkles className="w-3 h-3 text-purple-400" />
-                Etapa 3
+                Etapa 3C
               </Badge>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
@@ -81,10 +85,14 @@ export default function EscalasFolguistasPage() {
 
         {/* Abas de Navegação */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid grid-cols-2 sm:grid-cols-6 h-auto p-1 bg-muted/60">
+          <TabsList className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 h-auto p-1 bg-muted/60">
             <TabsTrigger value="proximo-fim-de-semana" className="text-xs py-2 gap-1.5">
               <Calendar className="w-3.5 h-3.5" />
               <span>Próximo FDS</span>
+            </TabsTrigger>
+            <TabsTrigger value="automacoes" className="text-xs py-2 gap-1.5 font-semibold text-amber-400">
+              <Bot className="w-3.5 h-3.5" />
+              <span>Automações</span>
             </TabsTrigger>
             <TabsTrigger value="calendario" className="text-xs py-2 gap-1.5">
               <CalendarDays className="w-3.5 h-3.5" />
@@ -119,6 +127,16 @@ export default function EscalasFolguistasPage() {
               onGenerate={generateSchedule}
               onSave={saveSchedule}
               onDiscardPreview={() => setGeneratedPreview(null)}
+            />
+          </TabsContent>
+
+          <TabsContent value="automacoes" className="space-y-4">
+            <AutomacoesSemanaisTab
+              workspaceId={workspaceId}
+              config={config}
+              escalas={escalas}
+              folguistas={folguistasAtivos}
+              onRefreshEscalas={refetchAll}
             />
           </TabsContent>
 
