@@ -62,6 +62,18 @@ serve(async (req: Request) => {
         });
       }
 
+      if (!clientId || !clientSecret) {
+        return new Response(
+          JSON.stringify({
+            error: "Credenciais Google OAuth não configuradas no Supabase Vault (GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET ausentes).",
+          }),
+          {
+            status: 503,
+            headers: { ...corsHeaders, "Content-Type": "application/json" },
+          }
+        );
+      }
+
       const body = await req.json().catch(() => ({}));
       const workspaceId = body.workspaceId;
       const redirectUri = body.redirectUri || "https://wallet.wonderwold.com.br/configuracoes";
