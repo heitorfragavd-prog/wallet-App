@@ -41,7 +41,7 @@ export interface StandardGroupTemplate {
 export const STANDARD_GROUP_TEMPLATES: Record<OperationalGroupType, StandardGroupTemplate> = {
   fechamento: {
     tipo_grupo: "fechamento",
-    nome_grupo: "Fechamento da Loja",
+    nome_grupo: "🧾 Fechamento Rodo Point",
     descricao:
       "Conferência diária do fechamento de caixa, recepção de fotos/envelopes, validação de sobras e conciliação automática com o Eyemobile PDV.",
     ferramentas_permitidas: ["buscar_vendas_pdv", "buscar_transacoes", "consultar_resumo_mensal"],
@@ -57,7 +57,7 @@ export const STANDARD_GROUP_TEMPLATES: Record<OperationalGroupType, StandardGrou
   },
   nfe_boletos: {
     tipo_grupo: "nfe_boletos",
-    nome_grupo: "Notas Fiscais e Boletos",
+    nome_grupo: "📄 Notas Fiscais e Boletos",
     descricao:
       "Recebimento de boletos e DANFEs (fotos, PDFs e linhas digitáveis), identificação de fornecedores, detecção de duplicidades e preparação de propostas de dívidas/custos/estoque sem execução automática de pagamentos.",
     ferramentas_permitidas: ["consultar_dividas", "buscar_despesas", "consultar_estoque", "consultar_fornecedores"],
@@ -73,7 +73,7 @@ export const STANDARD_GROUP_TEMPLATES: Record<OperationalGroupType, StandardGrou
   },
   contas_empresa: {
     tipo_grupo: "contas_empresa",
-    nome_grupo: "Contas da Empresa",
+    nome_grupo: "💰 Contas da Empresa",
     descricao:
       "Acompanhamento de contas a pagar, saldos, Pix Divipay, fornecedores, despesas, conciliações e confirmações financeiras operacionais. Acesso exclusivo para proprietário e administradores autorizados.",
     ferramentas_permitidas: [
@@ -97,7 +97,7 @@ export const STANDARD_GROUP_TEMPLATES: Record<OperationalGroupType, StandardGrou
   },
   conversas_loja: {
     tipo_grupo: "conversas_loja",
-    nome_grupo: "Conversas da Loja",
+    nome_grupo: "🏪 Conversas da Loja",
     descricao:
       "Comunicação operacional da equipe: recados de turno, procedimentos, tarefas, ocorrências e rotina da loja sem exposição de dados financeiros confidenciais.",
     ferramentas_permitidas: ["consultar_validades", "consultar_rotinas"],
@@ -112,7 +112,7 @@ export const STANDARD_GROUP_TEMPLATES: Record<OperationalGroupType, StandardGrou
   },
   folguistas: {
     tipo_grupo: "folguistas",
-    nome_grupo: "Folguistas Rodo Point",
+    nome_grupo: "👥 Folguistas Rodo Point",
     descricao:
       "Gestão inteligente de escalas, confirmação de disponibilidades, regras de turnos e folgas e recebimento de fechamento de caixa para espelhamento seguro no grupo principal.",
     ferramentas_permitidas: ["consultar_rotinas"],
