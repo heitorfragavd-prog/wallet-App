@@ -5006,33 +5006,67 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           },
         };
 
-        // Consolidação atômica e segura (Gate 1 & Gate 4)
-        const { data: fechExistente } = await supabase
-          .from("fechamentos_caixa")
-          .select("*")
-          .eq("workspace_id", workspaceId)
-          .eq("chave_operacional", chaveOperacional)
-          .maybeSingle();
-
+        // Ingestão atômica de anexo e concorrência com lock pessimista no banco (Gate 5)
+        let fechamentoFinalId = "";
         let todosAnexos: any[] = [];
         let telegramMsgs: number[] = [];
 
-        if (fechExistente) {
-          todosAnexos = Array.isArray(fechExistente.anexos) ? [...fechExistente.anexos] : [];
-          if (storagePath) todosAnexos.push(novoAnexoItem);
-          telegramMsgs = Array.isArray(fechExistente.telegram_message_ids) ? [...fechExistente.telegram_message_ids] : [];
-          if (message.message_id && !telegramMsgs.includes(message.message_id)) {
-            telegramMsgs.push(message.message_id);
+        try {
+          const { data: rpcRes, error: rpcErr } = await supabase.rpc("registrar_anexo_fechamento_atomico", {
+            p_workspace_id: workspaceId,
+            p_user_id: userId,
+            p_chat_id: grupoOficialChatId,
+            p_grupo_id: grupoOficialId,
+            p_origem_grupo_id: grupoConfig.id,
+            p_origem_canal: "telegram",
+            p_colaborador_id: colabId,
+            p_escala_id: escala?.id || null,
+            p_turno: turno,
+            p_chave_operacional: chaveOperacional,
+            p_data_fechamento: formatDateBR(hojeDate),
+            p_identidade_pendente: Boolean(identidadePendente),
+            p_anexo: storagePath ? novoAnexoItem : null,
+            p_telegram_message_id: message.message_id || null,
+          });
+
+          if (!rpcErr && rpcRes && rpcRes.id) {
+            fechamentoFinalId = rpcRes.id;
+            todosAnexos = Array.isArray(rpcRes.anexos) ? rpcRes.anexos : [];
+            telegramMsgs = Array.isArray(rpcRes.telegram_message_ids) ? rpcRes.telegram_message_ids : [];
+          } else if (rpcErr) {
+            console.warn("[telegram-webhook] RPC registrar_anexo_fechamento_atomico falhou, fallback para consulta direta:", rpcErr);
           }
-        } else {
-          todosAnexos = storagePath ? [novoAnexoItem] : [];
-          telegramMsgs = message.message_id ? [message.message_id] : [];
+        } catch (rpcEx) {
+          console.warn("[telegram-webhook] Exceção na RPC atômica:", rpcEx);
+        }
+
+        // Fallback de segurança caso a RPC não tenha retornado o registro
+        if (!fechamentoFinalId) {
+          const { data: fechExistente } = await supabase
+            .from("fechamentos_caixa")
+            .select("*")
+            .eq("workspace_id", workspaceId)
+            .eq("chave_operacional", chaveOperacional)
+            .maybeSingle();
+
+          if (fechExistente) {
+            todosAnexos = Array.isArray(fechExistente.anexos) ? [...fechExistente.anexos] : [];
+            if (storagePath) todosAnexos.push(novoAnexoItem);
+            telegramMsgs = Array.isArray(fechExistente.telegram_message_ids) ? [...fechExistente.telegram_message_ids] : [];
+            if (message.message_id && !telegramMsgs.includes(message.message_id)) {
+              telegramMsgs.push(message.message_id);
+            }
+            fechamentoFinalId = fechExistente.id;
+          } else {
+            todosAnexos = storagePath ? [novoAnexoItem] : [];
+            telegramMsgs = message.message_id ? [message.message_id] : [];
+          }
         }
 
         // Consolidação precisa sem Math.max cego nem soma duplicada (Gate 1)
         const consolidado = consolidateFechamentoValues(todosAnexos);
         const valoresFinais = consolidado.valores;
-        const sobraFinal = consolidado.sobra > 0 ? consolidado.sobra : (fechExistente?.sobra || 0);
+        const sobraFinal = consolidado.sobra > 0 ? consolidado.sobra : 0;
 
         // Auditoria com o Eyemobile (Gate 2)
         const conferenciaEyemobile = compareFechamentoVsEyemobile({
@@ -5041,15 +5075,18 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           turno,
         });
 
+        if (isTurnoAmbiguo && resTurno.motivoAmbiguidade) {
+          if (!conferenciaEyemobile.diferencas.includes(resTurno.motivoAmbiguidade)) {
+            conferenciaEyemobile.diferencas.push(resTurno.motivoAmbiguidade);
+          }
+        }
+
         const statusFechamento =
           conferenciaEyemobile.status === "divergencia"
             ? "divergencia"
             : "pendente_conferencia";
 
-        let fechamentoFinalId = "";
-
-        if (fechExistente) {
-          fechamentoFinalId = fechExistente.id;
+        if (fechamentoFinalId) {
           await supabase
             .from("fechamentos_caixa")
             .update({
@@ -5063,12 +5100,13 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
               sobra: sobraFinal > 0 ? sobraFinal : null,
               status: statusFechamento,
               identidade_pendente: identidadePendente,
+              anexo_path: storagePath || undefined,
               updated_at: new Date().toISOString(),
             })
-            .eq("id", fechExistente.id);
+            .eq("id", fechamentoFinalId);
         } else {
-          // Criação com unicidade segura via chave operacional (Gate 4)
-          const { data: newFech, error: insErr } = await supabase
+          // Criação direta de contingência
+          const { data: newFech } = await supabase
             .from("fechamentos_caixa")
             .insert({
               workspace_id: workspaceId,
@@ -5096,21 +5134,9 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
               telegram_message_ids: telegramMsgs,
             })
             .select("id")
-            .single();
+            .maybeSingle();
 
-          if (insErr) {
-            console.warn("[telegram-webhook] Insert direto falhou, tentando upsert de concorrência:", insErr);
-            // Em caso de colisão de webhook simultâneo, recupera o registro criado pelo outro worker
-            const { data: recovFech } = await supabase
-              .from("fechamentos_caixa")
-              .select("id")
-              .eq("workspace_id", workspaceId)
-              .eq("chave_operacional", chaveOperacional)
-              .maybeSingle();
-            fechamentoFinalId = recovFech?.id || "";
-          } else {
-            fechamentoFinalId = newFech?.id || "";
-          }
+          fechamentoFinalId = newFech?.id || "";
         }
 
         // Encaminhamento ao grupo oficial com proteção de limites Telegram (Gate 7)
