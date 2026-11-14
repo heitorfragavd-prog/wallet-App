@@ -125,6 +125,16 @@ export interface FechamentoCaixaItem {
   grupo_id: string | null;
   conversation_id: string | null;
   data_fechamento: string | null;
+  colaborador_id?: string | null;
+  colaborador?: {
+    id: string;
+    nome: string;
+  } | null;
+  escala_id?: string | null;
+  turno?: string | null;
+  origem_grupo_id?: string | null;
+  origem_canal?: string | null;
+  chave_operacional?: string | null;
   caixa1: Record<string, unknown>;
   caixa2: Record<string, unknown>;
   envelope_total: Record<string, unknown>;
@@ -132,6 +142,19 @@ export interface FechamentoCaixaItem {
   sobra: number | null;
   status: string | null;
   anexo_path: string | null;
+  anexos?: Array<{
+    id: string;
+    file_id: string;
+    storage_path: string;
+    mime_type: string;
+    tipo_documento: string;
+    caption?: string;
+    created_at: string;
+    valor_extraido?: Record<string, unknown>;
+  }> | null;
+  divergencias?: string[] | null;
+  espelhado_em?: string | null;
+  espelhado_message_id?: number | null;
   observacao: string | null;
   created_at: string | null;
 }

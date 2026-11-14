@@ -35,6 +35,7 @@ const CentralConversasPage: React.FC = () => {
     upsertGroup,
     upsertParticipant,
     removeParticipant,
+    handleAprovarFechamento,
   } = useCentralConversas();
 
   const [mobileShowThread, setMobileShowThread] = useState(false);
@@ -129,6 +130,7 @@ const CentralConversasPage: React.FC = () => {
               isExecutiveUser={isExecutiveUser}
               onOpenManageModal={handleOpenManageModal}
               onOpenAttachmentUrl={handleOpenAttachmentUrl}
+              onAprovarFechamento={handleAprovarFechamento}
             />
           </div>
         )}
@@ -152,6 +154,7 @@ const CentralConversasPage: React.FC = () => {
               handleOpenManageModal(id);
             }}
             onOpenAttachmentUrl={handleOpenAttachmentUrl}
+            onAprovarFechamento={handleAprovarFechamento}
           />
         </SheetContent>
       </Sheet>

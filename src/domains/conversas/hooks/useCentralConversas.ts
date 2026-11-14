@@ -732,18 +732,22 @@ export function useCentralConversas() {
           setProposals([]);
         }
 
-        if (thread.kind === "group" && thread.grupo?.tipo_grupo === "fechamento" && grupoId) {
+        if (thread.kind === "group" && (thread.grupo?.tipo_grupo === "fechamento" || thread.grupo?.tipo_grupo === "folguistas") && grupoId) {
           const { data: fechData } = await supabase
             .from("fechamentos_caixa")
             .select(
-              "id, workspace_id, grupo_id, conversation_id, data_fechamento, caixa1, caixa2, envelope_total, eyemobile_total, sobra, status, anexo_path, observacao, created_at",
+              "id, workspace_id, grupo_id, conversation_id, data_fechamento, colaborador_id, turno, chave_operacional, caixa1, caixa2, total, envelope_total, eyemobile_total, sobra, status, anexo_path, anexos, observacao, divergencias, espelhado_em, created_at, colaboradores(id, nome)",
             )
             .eq("workspace_id", workspaceId)
             .order("created_at", { ascending: false })
-            .limit(12);
+            .limit(15);
 
           if (currentRequestId !== loadActiveRequestIdRef.current) return;
-          setFechamentos((fechData || []) as FechamentoCaixaItem[]);
+          const mappedFechamentos: FechamentoCaixaItem[] = (fechData || []).map((f: Record<string, unknown>) => ({
+            ...f,
+            colaborador: f.colaboradores ? (f.colaboradores as { id: string; nome: string }) : null,
+          })) as FechamentoCaixaItem[];
+          setFechamentos(mappedFechamentos);
         } else {
           if (currentRequestId !== loadActiveRequestIdRef.current) return;
           setFechamentos([]);
@@ -1385,6 +1389,38 @@ export function useCentralConversas() {
     [loadWorkspaceContext, toast, workspaceId],
   );
 
+  const handleAprovarFechamento = useCallback(
+    async (fechamentoId: string) => {
+      try {
+        const { error } = await supabase
+          .from("fechamentos_caixa")
+          .update({
+            status: "conferido",
+            conferido_por: user?.id,
+            conferido_em: new Date().toISOString(),
+            updated_at: new Date().toISOString(),
+          })
+          .eq("id", fechamentoId);
+
+        if (error) throw error;
+        toast({
+          title: "Fechamento aprovado",
+          description: "O fechamento de caixa foi conferido e aprovado com sucesso.",
+        });
+        if (activeThreadRef.current) {
+          void loadActiveThreadDetails(activeThreadRef.current, { silent: true });
+        }
+      } catch (err) {
+        toast({
+          title: "Erro ao aprovar fechamento",
+          description: err instanceof Error ? err.message : "Falha na aprovação",
+          variant: "destructive",
+        });
+      }
+    },
+    [loadActiveThreadDetails, toast, user?.id],
+  );
+
   const activeParticipants = useMemo(() => {
     if (!activeThread?.grupo) return [];
     return participantes.filter(
@@ -1424,5 +1460,6 @@ export function useCentralConversas() {
     upsertGroup,
     upsertParticipant,
     removeParticipant,
+    handleAprovarFechamento,
   };
 }
