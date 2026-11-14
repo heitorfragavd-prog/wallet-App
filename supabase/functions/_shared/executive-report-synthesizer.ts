@@ -86,6 +86,13 @@ export function generateDeterministicSynthesis(
     );
   }
 
+  if ((operacao.eventosAgendaHoje || []).length > 0) {
+    const totalEv = operacao.eventosAgendaHoje!.length;
+    resumoLinhas.push(
+      `Agenda de hoje: ${totalEv} compromisso(s)/reunião(ões) programado(s) no Google Calendar e Wallet.`
+    );
+  }
+
   const executiveSummary = resumoLinhas.join(" ");
 
   // 2. Geração das Recomendações Prioritárias (Até 5)
@@ -167,6 +174,22 @@ export function generateDeterministicSynthesis(
       impactoEstimado: "Redução de gargalos operacionais e prevenção de falhas de conformidade.",
       grauConfianca: "medio",
       acaoRecomendada: "Acessar a agenda de lembretes e despachar as rotinas pendentes com os responsáveis operacionais.",
+    });
+  }
+
+  // Recomendação 7: Compromissos e Reuniões de Hoje
+  if ((operacao.eventosAgendaHoje || []).length > 0 && recommendations.length < 5) {
+    const eventos = operacao.eventosAgendaHoje!;
+    const primeiro = eventos[0];
+    const detalhePrimeiro = primeiro.hora ? ` (às ${primeiro.hora})` : "";
+    recommendations.push({
+      numero: recIndex++,
+      titulo: "Acompanhar compromissos e reuniões agendadas para hoje",
+      problemaOuOportunidade: `Você possui ${eventos.length} compromisso(s) na agenda de hoje, iniciando com "${primeiro.titulo}"${detalhePrimeiro}.`,
+      evidencia: `${operacao.reunioesGoogleCalendarHojeQuantidade || 0} sincronizado(s) via Google Calendar e ${operacao.compromissosHojeQuantidade || 0} compromisso(s) locais.`,
+      impactoEstimado: "Pontualidade nas decisões estratégicas e alinhamento com parceiros.",
+      grauConfianca: "alto",
+      acaoRecomendada: "Consultar a Agenda Inteligente ou pedir ao Wallet IA: 'Wallet, quais meus compromissos de hoje?'.",
     });
   }
 
