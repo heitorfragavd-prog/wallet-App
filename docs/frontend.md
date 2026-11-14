@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Superfícies observadas
 
-- Componentes, páginas ou views: 1426.
+- Componentes, páginas ou views: 1462.
 - Tailwind: detectado.
 - Tokens CSS: --cell-size, --radix-popover-content-transform-origin, ---, --border, --background, --foreground, --card, --card-foreground, --popover, --popover-foreground, --primary, --primary-foreground, --secondary, --secondary-foreground, --muted, --muted-foreground, --accent, --accent-foreground, --destructive, --destructive-foreground, --input, --ring, --radius, --sidebar-background, --sidebar-foreground, --sidebar-primary, --sidebar-primary-foreground, --sidebar-accent, --sidebar-accent-foreground, --sidebar-border, --sidebar-ring, --glass-bg, --glass-border, --particle-primary, --particle-secondary, --particle-accent, --gradient-start, --gradient-end, --kimi-color-border, --tw-ring-color, --color-, --color-border, --color-bg, --radix-navigation-menu-viewport-height, --radix-navigation-menu-viewport-width, --radix-select-trigger-height, --radix-select-trigger-width, --sidebar-width, --sidebar-width-icon, --skeleton-width, --radix-toast-swipe-end-x, --radix-toast-swipe-move-x, --radix-accordion-content-height.
 
@@ -1175,6 +1175,8 @@
 | src\domains\admin\components\RecentActivityCard.tsx |
 | src\domains\admin\components\TestarWebhookModal.tsx |
 | src\domains\admin\components\WebhookManutencaoCard.tsx |
+| src\domains\agenda\components\AgendaVoiceBar.tsx |
+| src\domains\agenda\components\GoogleCalendarIntegrationCard.tsx |
 | src\domains\auth\components\auth\ChangePasswordModal.tsx |
 | src\domains\auth\components\auth\DeleteAccountModal.tsx |
 | src\domains\auth\components\auth\ForgotPasswordForm.tsx |
@@ -1189,10 +1191,21 @@
 | src\domains\auth\components\ProtectedRoute.tsx |
 | src\domains\ceo\components\CeoCommercialAnalysisTab.tsx |
 | src\domains\ceo\components\CeoExpenseAnalysisTab.tsx |
+| src\domains\ceo\components\CeoGoalsTab.tsx |
+| src\domains\ceo\components\CeoNetProfitAnalysisTab.tsx |
 | src\domains\ceo\components\CeoOpportunitiesTab.tsx |
+| src\domains\ceo\components\CeoOverviewTab.test.tsx |
 | src\domains\ceo\components\CeoOverviewTab.tsx |
+| src\domains\ceo\components\CeoRoleGuard.tsx |
+| src\domains\ceo\components\ExecutiveReportsTab.tsx |
 | src\domains\ceo\components\GrowthExperimentCard.tsx |
 | src\domains\ceo\components\OpportunityCard.tsx |
+| src\domains\conversas\components\AudioRecorderButton.tsx |
+| src\domains\conversas\components\ConversaDetailPanel.tsx |
+| src\domains\conversas\components\ConversasSidebarList.tsx |
+| src\domains\conversas\components\ConversaThreadView.tsx |
+| src\domains\conversas\components\GerenciarGruposModal.tsx |
+| src\domains\conversas\components\WhatsAppIntegrationCard.tsx |
 | src\domains\delivery\components\DeliveryLayout.tsx |
 | src\domains\delivery\components\DeliveryMarginSimulator.tsx |
 | src\domains\delivery\components\ItemChecklistDialog.tsx |
@@ -1213,6 +1226,13 @@
 | src\domains\divipay\components\PagarDividaDivipayModal.tsx |
 | src\domains\divipay\components\SaquesFiltrosSheet.tsx |
 | src\domains\divipay\components\VerificarSaqueModal.tsx |
+| src\domains\escalas\components\tabs\AutomacoesSemanaisTab.tsx |
+| src\domains\escalas\components\tabs\CalendarioTab.tsx |
+| src\domains\escalas\components\tabs\ConfiguracoesTab.tsx |
+| src\domains\escalas\components\tabs\DisponibilidadesTab.tsx |
+| src\domains\escalas\components\tabs\FolguistasTab.tsx |
+| src\domains\escalas\components\tabs\HistoricoTab.tsx |
+| src\domains\escalas\components\tabs\ProximoFimDeSemanaTab.tsx |
 | src\domains\finance\components\AccountSelector.tsx |
 | src\domains\finance\components\AttachmentUploader.tsx |
 | src\domains\finance\components\comparativos\ComparativoDiarioView.tsx |
@@ -1239,10 +1259,12 @@
 | src\domains\finance\components\equipe\ColaboradorCard.tsx |
 | src\domains\finance\components\equipe\EmployeeCostBreakdown.test.tsx |
 | src\domains\finance\components\equipe\EmployeeCostBreakdown.tsx |
+| src\domains\finance\components\equipe\EquipeControleMensal.test.tsx |
 | src\domains\finance\components\equipe\EquipeForm.test.tsx |
 | src\domains\finance\components\equipe\EquipeForm.tsx |
 | src\domains\finance\components\equipe\EquipeReport.tsx |
 | src\domains\finance\components\equipe\EquipeSummaryCards.tsx |
+| src\domains\finance\components\equipe\RegistrarPagamentoRealizadoModal.tsx |
 | src\domains\finance\components\equipe\SensitiveValue.tsx |
 | src\domains\finance\components\equipe\SettlementStatusBadge.tsx |
 | src\domains\finance\components\equipe\SettlementSummary.tsx |
@@ -1252,6 +1274,9 @@
 | src\domains\finance\components\EyemobileDashboardView.tsx |
 | src\domains\finance\components\FaturaCartaoModal.tsx |
 | src\domains\finance\components\FluxoCaixaChart.tsx |
+| src\domains\finance\components\fornecedores\FornecedorCard.tsx |
+| src\domains\finance\components\fornecedores\FornecedorFichaFinanceiraModal.tsx |
+| src\domains\finance\components\fornecedores\FornecedorFormDialog.tsx |
 | src\domains\finance\components\HistoricoPagamentos.tsx |
 | src\domains\finance\components\ImportadorExtratoModal.tsx |
 | src\domains\finance\components\ImportarFaturaModal.tsx |
@@ -1279,6 +1304,7 @@
 | src\domains\finance\hooks\useEquipeAcertos.test.tsx |
 | src\domains\finance\hooks\useFolguistaEscalas.atomic.test.tsx |
 | src\domains\finance\hooks\usePagamentosDivida.test.tsx |
+| src\domains\gmail\components\GmailDocumentsDashboard.tsx |
 | src\domains\ia\components\AgentActionProposalCard.test.tsx |
 | src\domains\ia\components\AgentActionProposalCard.tsx |
 | src\domains\ia\components\AgentV2Tab.tsx |
@@ -1288,6 +1314,8 @@
 | src\domains\ia\components\UploadInteligente.tsx |
 | src\domains\market\components\EditarItemMercadoModal.tsx |
 | src\domains\market\components\NovoItemMercadoModal.tsx |
+| src\domains\notifications\components\TeamPermissionsTab.tsx |
+| src\domains\notifications\components\UserPreferencesTab.tsx |
 | src\domains\pdv\components\PDVCart.tsx |
 | src\domains\pdv\components\PDVConfigurarView.tsx |
 | src\domains\pdv\components\PDVHeader.tsx |
@@ -1326,6 +1354,7 @@
 | src\pages\CardapioDetalhe.tsx |
 | src\pages\CardapioNovo.tsx |
 | src\pages\Categorias.tsx |
+| src\pages\CentralConversasPage.tsx |
 | src\pages\CentrosCusto.tsx |
 | src\pages\Comparativo.tsx |
 | src\pages\Conciliacao.tsx |
@@ -1344,6 +1373,7 @@
 | src\pages\EquipeDetalhe.tsx |
 | src\pages\EquipeEditar.tsx |
 | src\pages\EquipeNovo.tsx |
+| src\pages\EscalasFolguistasPage.tsx |
 | src\pages\EyemobilePDV.tsx |
 | src\pages\FluxoCaixa.tsx |
 | src\pages\Fornecedores.tsx |
@@ -1371,6 +1401,7 @@
 | src\pages\WalletDeliveryPage.tsx |
 | src\pages\WalletIAPage.test.tsx |
 | src\pages\WalletIAPage.tsx |
+| src\pages\__tests__\DashboardNavigation.test.tsx |
 | src\shared\components\BankLogoBadge.tsx |
 | src\shared\components\DateRangePicker\DateRangePicker.tsx |
 | src\shared\components\ErrorBoundary.tsx |
@@ -1435,4 +1466,9 @@
 | src\shared\components\__tests__\WorkspaceSwitcher.test.tsx |
 | src\shared\hooks\use-mobile.tsx |
 | tailwind.config.ts |
+| tests\ceo\etapa8_experimentos_lifecycle.test.tsx |
+| tests\ceo\etapa9_gate4_interface_metas.test.tsx |
+| tests\ceo\ui_executive_reports_tab.test.tsx |
+| tests\conversas\etapa13_gate8_gate9_whatsapp_ui_telemetry.test.tsx |
+| tests\notifications\ui_preferences_team_rbac.test.tsx |
 <!-- specsfy:documentator:end -->
