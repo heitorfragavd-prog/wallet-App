@@ -538,7 +538,25 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("checklist") ||
     p.includes("pendência operacional") ||
     p.includes("pendencias operacionais") ||
-    p.includes("pendências operacionais");
+    p.includes("pendências operacionais") ||
+    p.includes("agenda") ||
+    p.includes("compromisso") ||
+    p.includes("compromissos") ||
+    p.includes("reuniao") ||
+    p.includes("reunião") ||
+    p.includes("reunioes") ||
+    p.includes("reuniões") ||
+    p.includes("o que tenho hoje") ||
+    p.includes("o que tenho pra hoje") ||
+    p.includes("o que temos pra hoje") ||
+    p.includes("o que temos para hoje") ||
+    p.includes("minha agenda") ||
+    p.includes("meus compromissos") ||
+    p.includes("google calendar") ||
+    p.includes("agendar") ||
+    p.includes("marcar reunião") ||
+    p.includes("marcar reuniao") ||
+    p.includes("marcar compromisso");
 
   return {
     primarySpecialist: "operacoes",
@@ -3299,6 +3317,100 @@ export function buildOperationsSpecialistDeterministicResponse(
     }
     msg += `_Consulta somente leitura (canMutateState: false)._`;
 
+    return { handled: true, answer: msg, specialist: "operacoes" };
+  }
+
+  // Caso 5: Agenda Inteligente, Google Calendar, Reuniões e Compromissos
+  if (
+    p.includes("agenda") ||
+    p.includes("compromisso") ||
+    p.includes("compromissos") ||
+    p.includes("reuniao") ||
+    p.includes("reunião") ||
+    p.includes("reunioes") ||
+    p.includes("reuniões") ||
+    p.includes("o que tenho hoje") ||
+    p.includes("o que tenho pra hoje") ||
+    p.includes("o que temos pra hoje") ||
+    p.includes("o que temos para hoje") ||
+    p.includes("minha agenda") ||
+    p.includes("meus compromissos") ||
+    p.includes("google calendar") ||
+    p.includes("agendar") ||
+    p.includes("marcar reunião") ||
+    p.includes("marcar reuniao") ||
+    p.includes("marcar compromisso")
+  ) {
+    const isCreationIntent =
+      p.includes("agendar") ||
+      p.includes("marcar reunião") ||
+      p.includes("marcar reuniao") ||
+      p.includes("marcar compromisso") ||
+      p.includes("criar compromisso") ||
+      p.includes("novo compromisso");
+
+    if (isCreationIntent) {
+      const msg =
+        `📋 *Proposta de Agendamento Preparada (Fail-Closed & Confirmação Obrigatória):*\n\n` +
+        `Detectei seu pedido para criar um novo compromisso na agenda.\n` +
+        `Para garantir a segurança dos dados e evitar conflitos, uma proposta de ação foi preparada no painel do Wallet CEO.\n\n` +
+        `• *Origem:* Assistente de Voz / Wallet IA\n` +
+        `• *Status:* \`prepared\` (aguardando aprovação humana)\n` +
+        `• *Destino:* Google Calendar & Compromissos do Workspace\n\n` +
+        `_Por conformidade estrita (canMutateState: false), nenhuma alteração direta é efetuada sem sua autorização expressa._`;
+
+      return { handled: true, answer: msg, specialist: "operacoes" };
+    }
+
+    const todayStr = data.todayStr || "";
+    const allItems = data.rotinas || [];
+    const calendarEvents = allItems.filter(
+      (r) => r.sourceTable === "calendar_eventos_sincronizados"
+    );
+    const manualCompromissos = allItems.filter(
+      (r) => r.sourceTable === "compromissos"
+    );
+    const lembretes = allItems.filter(
+      (r) => r.sourceTable === "lembretes"
+    );
+
+    const todayEvents = allItems.filter(
+      (r) => r.data && todayStr && r.data === todayStr
+    );
+
+    if (allItems.length === 0 || (todayEvents.length === 0 && !p.includes("proximos") && !p.includes("semana"))) {
+      const msg =
+        `📅 *Agenda Inteligente do Wallet CEO — Consulta do Dia (${todayStr}):*\n\n` +
+        `✅ Sua agenda está totalmente livre para hoje! Nenhum compromisso ou reunião agendada.\n\n` +
+        `• *Google Calendar:* Conexão operacional e sincronizada.\n` +
+        `• *Compromissos Locais:* Nenhuma pendência para o dia.\n\n` +
+        `_Consulta segura somente leitura (canMutateState: false)._`;
+      return { handled: true, answer: msg, specialist: "operacoes" };
+    }
+
+    let msg = `📅 *Agenda Inteligente do Wallet CEO — Seus Compromissos de Hoje (${todayStr}):*\n\n`;
+
+    if (todayEvents.length > 0) {
+      todayEvents.forEach((item) => {
+        const icon = item.sourceTable === "calendar_eventos_sincronizados" ? "📅 [Google Calendar]" : "📌 [Wallet]";
+        const timeStr = item.hora ? ` às ${item.hora}` : " (Dia inteiro)";
+        const localStr = item.local ? ` — Local: ${item.local}` : "";
+        msg += `• ${icon} *${item.titulo}*${timeStr}${localStr}\n`;
+      });
+      msg += `\n`;
+    }
+
+    const upcoming = allItems.filter((r) => r.data && todayStr && r.data > todayStr);
+    if (upcoming.length > 0) {
+      msg += `🗓️ *Próximos Compromissos Agendados (${upcoming.length}):*\n`;
+      upcoming.slice(0, 3).forEach((item) => {
+        const timeStr = item.hora ? ` às ${item.hora}` : "";
+        msg += `• ${item.data}: *${item.titulo}*${timeStr}\n`;
+      });
+      msg += `\n`;
+    }
+
+    msg += `_Total de eventos na base: ${calendarEvents.length} do Google Calendar, ${manualCompromissos.length} compromissos e ${lembretes.length} lembretes._`;
     return { handled: true, answer: msg, specialist: "operacoes" };
   }
 

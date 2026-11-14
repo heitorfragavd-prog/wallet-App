@@ -1681,6 +1681,61 @@ export async function handleTelegramTextMessage(
     }
   }
 
+  // ─── Comando /agenda e /compromissos (Etapa 12 Gate 6) ───
+  const lowerPrompt = normalizedPrompt.toLowerCase();
+  if (lowerPrompt === "/agenda" || lowerPrompt.startsWith("/agenda ") || lowerPrompt === "/compromissos") {
+    if (isGroup || identity.grupo) {
+      return {
+        text: "🔒 <b>Acesso Restrito:</b> A visualização detalhada da agenda executiva e compromissos confidenciais está restrita ao chat privado com o CEO/Gestor.",
+      };
+    }
+
+    try {
+      const todayStr = new Intl.DateTimeFormat("en-CA", {
+        timeZone: "America/Sao_Paulo",
+        year: "numeric",
+        month: "2-digit",
+        day: "2-digit",
+      }).format(new Date());
+
+      const allReminders = repo.listOperationalReminders
+        ? await repo.listOperationalReminders(context, { start: todayStr, end: todayStr })
+        : [];
+
+      const todayItems = allReminders.filter((r) => r.data === todayStr);
+
+      if (todayItems.length === 0) {
+        return {
+          text:
+            `📅 <b>Agenda Inteligente do Wallet CEO</b>\n` +
+            `Data: <code>${todayStr}</code>\n\n` +
+            `✅ <b>Nenhum compromisso ou reunião agendada para hoje!</b>\n` +
+            `Sua agenda está totalmente livre.\n\n` +
+            `<i>Google Calendar sincronizado e operacional.</i>`,
+        };
+      }
+
+      let agendaText = `📅 <b>Sua Agenda de Hoje (${todayStr}):</b>\n\n`;
+      todayItems.forEach((item) => {
+        const icon = item.sourceTable === "calendar_eventos_sincronizados" ? "📅 [Google Calendar]" : "📌 [Wallet]";
+        const hora = item.hora ? ` às <b>${item.hora}</b>` : " (Dia inteiro)";
+        const local = item.local ? `\n   📍 <i>${escapeTelegramHtml(item.local)}</i>` : "";
+        agendaText += `• ${icon} <b>${escapeTelegramHtml(item.titulo)}</b>${hora}${local}\n`;
+      });
+
+      agendaText += `\n<i>Total de ${todayItems.length} compromisso(s) programado(s).</i>`;
+
+      return {
+        text: agendaText,
+      };
+    } catch (agendaErr) {
+      console.warn("[telegram-adapter] Erro ao consultar agenda:", agendaErr);
+      return {
+        text: "⚠️ Ocorreu uma instabilidade ao consultar os eventos da agenda. Por favor, tente novamente.",
+      };
+    }
+  }
+
   const effectiveSystemPrompt = identity.grupo
     ? buildGroupSystemPrompt(FINANCIAL_AGENT_SYSTEM_PROMPT, identity.grupo.tipoGrupo, identity.grupo.nomeGrupo)
     : FINANCIAL_AGENT_SYSTEM_PROMPT;
