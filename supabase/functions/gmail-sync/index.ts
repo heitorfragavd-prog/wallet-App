@@ -1,6 +1,8 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.38.4";
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
+import { parseNfeXml } from "../_shared/ai/nfe-xml-parser.ts";
+import { findGlobalFinancialDuplicate } from "../_shared/ai/financial-deduplication.ts";
 
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -355,9 +357,129 @@ serve(async (req: Request) => {
         const dateStr = getHeader("Date");
         const emailDate = dateStr ? new Date(dateStr).toISOString() : new Date().toISOString();
 
-        // Conta anexos
-        const parts = (msgDetail.payload?.parts || []) as Array<{ filename?: string; body?: { attachmentId?: string } }>;
+        // Conta e avalia anexos
+        const parts = (msgDetail.payload?.parts || []) as Array<{
+          partId?: string;
+          filename?: string;
+          mimeType?: string;
+          body?: { attachmentId?: string; size?: number };
+        }>;
         const attachmentParts = parts.filter((p) => p.filename && p.filename.length > 0);
+
+        let tipoDocumento: "boleto" | "nfe" | "comprovante" | "cobranca" | "outro" | "sem_anexo" =
+          attachmentParts.length > 0 ? "outro" : "sem_anexo";
+        let proposalId: string | null = null;
+        let fornecedorId: string | null = null;
+        const detalhesExtracao: Record<string, unknown> = {};
+
+        // Processamento inteligente de anexos (GATE 4 & GATE 5)
+        for (const att of attachmentParts) {
+          const fname = (att.filename || "").toLowerCase();
+          const attId = att.body?.attachmentId;
+
+          // Processamento Determinístico de XML NF-e
+          if (fname.endsWith(".xml") && attId) {
+            try {
+              const attResp = await fetch(
+                `https://gmail.googleapis.com/gmail/v1/users/me/messages/${msgRef.id}/attachments/${attId}`,
+                { headers: { Authorization: `Bearer ${accessToken}` } }
+              );
+              if (attResp.ok) {
+                const attData = await attResp.json();
+                const rawBase64 = (attData.data || "").replace(/-/g, "+").replace(/_/g, "/");
+                const xmlString = new TextDecoder().decode(
+                  Uint8Array.from(atob(rawBase64), (c) => c.charCodeAt(0))
+                );
+
+                const nfeParsed = parseNfeXml(xmlString);
+                if (nfeParsed.valido && nfeParsed.chaveAcesso) {
+                  tipoDocumento = "nfe";
+                  detalhesExtracao.chave_acesso = nfeParsed.chaveAcesso;
+                  detalhesExtracao.numero_nota = nfeParsed.numeroNota;
+                  detalhesExtracao.emitente = nfeParsed.emitente;
+                  detalhesExtracao.valor_total = nfeParsed.valores.valorTotal;
+                  detalhesExtracao.duplicatas = nfeParsed.duplicatas;
+                  detalhesExtracao.itens_qtd = nfeParsed.itens.length;
+
+                  // Deduplicação Global Trilateral (GATE 6)
+                  const dupCheck = await findGlobalFinancialDuplicate(supabase, {
+                    workspaceId,
+                    chaveAcesso: nfeParsed.chaveAcesso,
+                    numeroNota: nfeParsed.numeroNota,
+                    cnpjEmitente: nfeParsed.emitente.cnpj,
+                    valor: nfeParsed.valores.valorTotal,
+                  });
+
+                  if (dupCheck.isDuplicate) {
+                    detalhesExtracao.duplicado = true;
+                    detalhesExtracao.duplicado_origem = dupCheck.source;
+                    detalhesExtracao.duplicado_registro_id = dupCheck.existingRecordId;
+                  } else {
+                    // Associação ou Localização de Fornecedor
+                    const { data: forn } = await supabase
+                      .from("fornecedores")
+                      .select("id, razao_social, cnpj")
+                      .eq("workspace_id", workspaceId)
+                      .eq("cnpj", nfeParsed.emitente.cnpj)
+                      .maybeSingle();
+
+                    if (forn) {
+                      fornecedorId = forn.id;
+                      detalhesExtracao.fornecedor_id = forn.id;
+                    }
+
+                    // Criação de Proposta de Ação Transacional (STATUS: prepared, NUNCA executa pagamento)
+                    const propHashInput = `${workspaceId}:nfe:${nfeParsed.chaveAcesso}`;
+                    const propHashBuf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(propHashInput));
+                    const propIdempotencyHash = Array.from(new Uint8Array(propHashBuf))
+                      .map((b) => b.toString(16).padStart(2, "0"))
+                      .join("");
+
+                    const expiresAt = new Date(Date.now() + 7 * 24 * 3600 * 1000).toISOString();
+                    const { data: newProp } = await supabase
+                      .from("wallet_ai_action_proposals")
+                      .insert({
+                        workspace_id: workspaceId,
+                        user_id: integ.user_id,
+                        action_type: "cadastrar_nfe",
+                        summary: `Nota Fiscal nº ${nfeParsed.numeroNota || "S/N"} - ${nfeParsed.emitente.razaoSocial} (R$ ${nfeParsed.valores.valorTotal.toFixed(2)})`,
+                        payload: {
+                          origem: "gmail",
+                          email_message_id: msgRef.id,
+                          email_subject: subject,
+                          email_remetente: from,
+                          chave_acesso: nfeParsed.chaveAcesso,
+                          numero_nota: nfeParsed.numeroNota,
+                          fornecedor_id: fornecedorId,
+                          emitente: nfeParsed.emitente,
+                          valores: nfeParsed.valores,
+                          duplicatas: nfeParsed.duplicatas,
+                          itens: nfeParsed.itens,
+                        },
+                        idempotency_hash: propIdempotencyHash,
+                        status: "prepared",
+                        expires_at: expiresAt,
+                      })
+                      .select("id")
+                      .maybeSingle();
+
+                    if (newProp) {
+                      proposalId = newProp.id;
+                    }
+                  }
+                }
+              }
+            } catch (xmlErr) {
+              console.warn("[gmail-sync] Falha na extração de XML:", xmlErr);
+            }
+          }
+
+          // Se for boleto em PDF
+          if (fname.includes("boleto") && fname.endsWith(".pdf")) {
+            tipoDocumento = "boleto";
+            detalhesExtracao.tipo_detectado_nome = "boleto_pdf";
+          }
+        }
 
         // Gera hash idempotente único do e-mail
         const rawHashInput = `${workspaceId}:${msgRef.id}:${from}:${subject}`;
@@ -378,7 +500,10 @@ serve(async (req: Request) => {
           data_email: emailDate,
           qtd_anexos: attachmentParts.length,
           status: attachmentParts.length > 0 ? "processado" : "ignorado",
-          tipo_documento_detectado: attachmentParts.length > 0 ? "outro" : "sem_anexo",
+          tipo_documento_detectado: tipoDocumento,
+          proposal_id: proposalId,
+          fornecedor_id: fornecedorId,
+          detalhes_extracao: detalhesExtracao,
           idempotency_hash: idempotencyHash,
         });
 

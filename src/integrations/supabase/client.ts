@@ -55,7 +55,7 @@ export const supabase = createClient<Database>(
   config.supabase.anonKey,
   {
     auth: {
-      storage: localStorage,
+      storage: typeof window !== 'undefined' && typeof window.localStorage !== 'undefined' ? window.localStorage : undefined,
       persistSession: true,
       autoRefreshToken: true,
       lock: resilientAuthLock,
