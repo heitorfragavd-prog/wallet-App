@@ -15,10 +15,9 @@ import type {
   EscalaAutomacaoLog,
   EscalaSlot,
   FolguistaSubstitutionCandidate,
-  TurnoId,
+  SimulacaoRespostaFolguistaResult,
 } from "../types";
 import { EscalaAutomacaoEngine, type VagaAbertaInfo } from "../services/escalaAutomacaoEngine";
-import { parseFolguistaMessage } from "../services/folguistaResponseParser";
 import { getNextWeekendDates } from "../services/escalaDateUtils";
 
 interface UseEscalasAutomacoesProps {
@@ -44,6 +43,7 @@ export function useEscalasAutomacoes({
   const [substitutesModalOpen, setSubstitutesModalOpen] = useState(false);
   const [selectedVagaForSub, setSelectedVagaForSub] = useState<VagaAbertaInfo | null>(null);
   const [substituteCandidates, setSubstituteCandidates] = useState<FolguistaSubstitutionCandidate[]>([]);
+  const [simulacaoResultado, setSimulacaoResultado] = useState<SimulacaoRespostaFolguistaResult | null>(null);
 
   const weekend = getNextWeekendDates(new Date());
 
@@ -172,89 +172,73 @@ export function useEscalasAutomacoes({
     }
   };
 
-  // Processa resposta simulada de folguista (para teste do administrador)
+  // Processa resposta simulada de folguista (Gate 3 - Isolamento Total: NUNCA altera o banco de dados)
   const handleSimulateFolguistaResponse = async (
+    colaboradorId: string,
+    rawText: string,
+    isFridayContext = false
+  ): Promise<SimulacaoRespostaFolguistaResult | null> => {
+    if (!workspaceId || !colaboradorId || !rawText.trim()) return null;
+    const colab = folguistas.find((f) => f.id === colaboradorId);
+    const colabNome = colab?.nome || "Folguista";
+
+    const resultado = EscalaAutomacaoEngine.simulateFolguistaResponse({
+      colaboradorId,
+      colaboradorNome: colabNome,
+      rawText,
+      isFridayContext,
+      weekend,
+    });
+
+    setSimulacaoResultado(resultado);
+
+    toast({
+      title: "Simulação de Resposta Concluída",
+      description: `Mensagem interpretada com sucesso. Modo de teste: NENHUM dado real foi alterado (${resultado.acoesPropostas.length} ações simuladas).`,
+    });
+
+    return resultado;
+  };
+
+  // Aplica explicitamente as alterações na escala oficial quando autorizado pelo administrador (Gate 3)
+  const handleApplyRealFolguistaResponse = async (
     colaboradorId: string,
     rawText: string,
     isFridayContext = false
   ) => {
     if (!workspaceId || !colaboradorId || !rawText.trim()) return;
     const colab = folguistas.find((f) => f.id === colaboradorId);
-    const parsed = parseFolguistaMessage(rawText, {
-      colaboradorId,
-      colaboradorNome: colab?.nome,
-      isFridayConfirmationContext: isFridayContext,
-    });
+    const colabNome = colab?.nome || "Folguista";
 
-    // Se for confirmação ou disponibilidade positiva
-    if (parsed.disponibilidadeGeral === "disponivel" || parsed.dias.sabado.disponivel || parsed.dias.domingo.disponivel) {
-      const turnosSab = parsed.dias.sabado.turnos.length > 0 ? parsed.dias.sabado.turnos : ["qualquer" as TurnoId];
-      for (const t of turnosSab) {
-        await supabase
-          .from("folguistas_disponibilidade")
-          .upsert(
-            {
-              workspace_id: workspaceId,
-              colaborador_id: colaboradorId,
-              data_referencia: weekend.sabado,
-              turno: t,
-              disponivel: true,
-              confirmado: parsed.tipoMensagem === "confirmacao_presenca",
-              origem: "manual",
-              resposta_raw: rawText,
-            },
-            { onConflict: "colaborador_id,data_referencia,turno" }
-          );
+    try {
+      const res = await EscalaAutomacaoEngine.applyRealFolguistaResponse({
+        workspaceId,
+        colaboradorId,
+        colaboradorNome: colabNome,
+        rawText,
+        isFridayContext,
+        weekend,
+        origem: "manual",
+      });
+
+      toast({
+        title: "Disponibilidade Real Registrada",
+        description: res.mensagem,
+      });
+
+      setSimulacaoResultado(null);
+      if (onRefreshEscalas) {
+        onRefreshEscalas();
       }
-
-      const turnosDom = parsed.dias.domingo.turnos.length > 0 ? parsed.dias.domingo.turnos : ["qualquer" as TurnoId];
-      for (const t of turnosDom) {
-        await supabase
-          .from("folguistas_disponibilidade")
-          .upsert(
-            {
-              workspace_id: workspaceId,
-              colaborador_id: colaboradorId,
-              data_referencia: weekend.domingo,
-              turno: t,
-              disponivel: true,
-              confirmado: parsed.tipoMensagem === "confirmacao_presenca",
-              origem: "manual",
-              resposta_raw: rawText,
-            },
-            { onConflict: "colaborador_id,data_referencia,turno" }
-          );
-      }
-    } else if (parsed.disponibilidadeGeral === "indisponivel") {
-      // Grava indisponibilidade
-      await supabase
-        .from("folguistas_disponibilidade")
-        .upsert(
-          {
-            workspace_id: workspaceId,
-            colaborador_id: colaboradorId,
-            data_referencia: weekend.sabado,
-            turno: "qualquer",
-            disponivel: false,
-            confirmado: false,
-            origem: "manual",
-            resposta_raw: rawText,
-          },
-          { onConflict: "colaborador_id,data_referencia,turno" }
-        );
+      await loadAutomacoesLogs();
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : "Erro desconhecido";
+      toast({
+        title: "Erro ao Gravar Disponibilidade Real",
+        description: msg,
+        variant: "destructive",
+      });
     }
-
-    toast({
-      title: "Resposta Processada",
-      description: `Wallet IA: "${parsed.respostaConfirmacaoAgradecimento}"`,
-    });
-
-    if (onRefreshEscalas) {
-      onRefreshEscalas();
-    }
-    await loadAutomacoesLogs();
-
-    return parsed;
   };
 
   // Abre busca de substitutos para uma vaga específica
@@ -288,6 +272,9 @@ export function useEscalasAutomacoes({
     handleTriggerMonday,
     handleTriggerFriday,
     handleSimulateFolguistaResponse,
+    handleApplyRealFolguistaResponse,
+    simulacaoResultado,
+    setSimulacaoResultado,
     handleOpenSubstituteSearch,
     loadAutomacoesLogs,
   };

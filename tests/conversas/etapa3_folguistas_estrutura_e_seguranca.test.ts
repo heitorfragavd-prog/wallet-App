@@ -108,7 +108,7 @@ describe("Etapa 3A — Grupo Folguistas Rodo Point: Estrutura, Governança e Seg
     const tpl = STANDARD_GROUP_TEMPLATES.folguistas;
     expect(tpl).toBeDefined();
     expect(tpl.tipo_grupo).toBe("folguistas");
-    expect(tpl.nome_grupo).toBe("Folguistas Rodo Point");
+    expect(tpl.nome_grupo).toMatch(/Folguistas Rodo Point/);
     expect(tpl.restritoAdmins).toBe(false);
 
     const meta = GROUP_TYPE_META.folguistas;

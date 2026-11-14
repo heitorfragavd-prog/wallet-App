@@ -15,12 +15,16 @@ import {
   FolguistaSubstitutionCandidate,
   TurnoId,
   TURNOS_PADRAO,
+  TelegramEnvioStatus,
+  SimulacaoRespostaFolguistaResult,
+  AcaoPropostaSimulada,
 } from "../types";
-import { getNextWeekendDates, formatDateBR } from "./escalaDateUtils";
+import { getNextWeekendDates, formatDateBR, WeekendDates } from "./escalaDateUtils";
 import {
   validateFridayToSaturdayMorning,
   validateSuellenSundayNight,
 } from "./escalaEngine";
+import { parseFolguistaMessage } from "./folguistaResponseParser";
 
 export interface VagaAbertaInfo {
   data: string; // YYYY-MM-DD
@@ -190,6 +194,12 @@ Obrigado!`;
     escalasExistentes?: EscalaSlot[];
     folguistasAtivos?: ColaboradorFolguista[];
     config?: Partial<EscalasConfig>;
+    telegramStatusConfirmed?: {
+      sent: boolean;
+      messageId?: string;
+      apiResponse?: Record<string, unknown>;
+      error?: string;
+    };
   }): Promise<MondayConsultationResult> {
     const {
       workspaceId,
@@ -198,6 +208,7 @@ Obrigado!`;
       escalasExistentes = [],
       folguistasAtivos = [],
       config = {},
+      telegramStatusConfirmed,
     } = params;
 
     const weekend = getNextWeekendDates(referenceDate);
@@ -246,6 +257,7 @@ Obrigado!`;
           data_fim_semana_inicio: weekend.sabado,
           data_fim_semana_fim: weekend.domingo,
           status: simulada ? "simulada" : "executada",
+          status_envio: (simulada ? "simulada" : "cancelada") as TelegramEnvioStatus,
           destinatario_tipo: "sistema",
           mensagem_texto: msgSemVagas,
           vagas_identificadas: [],
@@ -274,7 +286,17 @@ Obrigado!`;
       vagas,
     });
 
-    // 5. Gravação no log de auditoria
+    // 5. Determinação estrita de status de envio (Gate 4)
+    const statusEnvio: TelegramEnvioStatus = simulada
+      ? "simulada"
+      : telegramStatusConfirmed?.sent
+      ? "enviada"
+      : telegramStatusConfirmed?.error
+      ? "falha"
+      : "preparada";
+    const enviadoTelegram = Boolean(!simulada && telegramStatusConfirmed?.sent);
+
+    // 6. Gravação no log de auditoria
     const { data: logCriado, error: errLog } = await supabase
       .from("escalas_automacoes_log")
       .upsert({
@@ -283,7 +305,12 @@ Obrigado!`;
         idempotency_key: idempotencyKey,
         data_fim_semana_inicio: weekend.sabado,
         data_fim_semana_fim: weekend.domingo,
-        status: simulada ? "simulada" : "executada",
+        status: simulada ? "simulada" : (telegramStatusConfirmed?.error ? "erro" : "executada"),
+        status_envio: statusEnvio,
+        telegram_message_id: telegramStatusConfirmed?.messageId || null,
+        api_response: telegramStatusConfirmed?.apiResponse || {},
+        erro_detalhes: telegramStatusConfirmed?.error || null,
+        erro_mensagem: telegramStatusConfirmed?.error || null,
         destinatario_tipo: "grupo",
         mensagem_texto: textoMensagem,
         vagas_identificadas: vagas.map((v) => ({
@@ -292,7 +319,7 @@ Obrigado!`;
           turno: v.turno,
           horario: `${v.horarioInicio} às ${v.horarioFim}`,
         })),
-        enviado_telegram: !simulada,
+        enviado_telegram: enviadoTelegram,
       }, { onConflict: "idempotency_key" })
       .select("id")
       .single();
@@ -304,7 +331,7 @@ Obrigado!`;
     return {
       sucesso: true,
       idempotente: false,
-      mensagem: `Consulta de disponibilidade de segunda-feira preparada com sucesso (${vagas.length} turnos a cobrir). Modo de simulação: ${simulada ? "ATIVO (sem disparo real)" : "DESATIVADO (enviado ao grupo)"}.`,
+      mensagem: `Consulta de disponibilidade de segunda-feira preparada com sucesso (${vagas.length} turnos a cobrir). Modo de simulação: ${simulada ? "ATIVO (sem disparo real)" : (enviadoTelegram ? "DESATIVADO (enviado e confirmado via Telegram)" : "AGUARDANDO ENVIO")}.`,
       vagasAbertas: vagas,
       totalFolguistasContatados: folguistasAtivos.length,
       simulada,
@@ -343,6 +370,15 @@ Pode confirmar sua presença?`;
     escalasExistentes: EscalaSlot[];
     colaboradores?: ColaboradorFolguista[];
     config?: Partial<EscalasConfig>;
+    telegramStatusConfirmedMap?: Record<
+      string,
+      {
+        sent: boolean;
+        messageId?: string;
+        apiResponse?: Record<string, unknown>;
+        error?: string;
+      }
+    >;
   }): Promise<FridayConfirmationResult> {
     const {
       workspaceId,
@@ -350,6 +386,7 @@ Pode confirmar sua presença?`;
       escalasExistentes,
       colaboradores = [],
       config = {},
+      telegramStatusConfirmedMap = {},
     } = params;
 
     const weekend = getNextWeekendDates(referenceDate);
@@ -397,6 +434,15 @@ Pode confirmar sua presença?`;
       });
 
       const idempotencyKey = `confirmacao_sexta_ws_${workspaceId}_${slot.data}_${slot.turno}_${slot.colaboradorId}`;
+      const confStatus = telegramStatusConfirmedMap[slot.colaboradorId || ""];
+      const statusEnvio: TelegramEnvioStatus = simulada
+        ? "simulada"
+        : confStatus?.sent
+        ? "enviada"
+        : confStatus?.error
+        ? "falha"
+        : "preparada";
+      const enviadoTelegram = Boolean(!simulada && confStatus?.sent);
 
       const { data: inserted } = await supabase
         .from("escalas_automacoes_log")
@@ -406,7 +452,12 @@ Pode confirmar sua presença?`;
           idempotency_key: idempotencyKey,
           data_fim_semana_inicio: weekend.sabado,
           data_fim_semana_fim: weekend.domingo,
-          status: simulada ? "simulada" : "executada",
+          status: simulada ? "simulada" : (confStatus?.error ? "erro" : "executada"),
+          status_envio: statusEnvio,
+          telegram_message_id: confStatus?.messageId || null,
+          api_response: confStatus?.apiResponse || {},
+          erro_detalhes: confStatus?.error || null,
+          erro_mensagem: confStatus?.error || null,
           destinatario_tipo: "individual",
           destinatario_id: slot.colaboradorId,
           destinatario_nome: colabNome,
@@ -419,7 +470,7 @@ Pode confirmar sua presença?`;
               horario: `${infoTurno.inicio} às ${infoTurno.fim}`,
             },
           ],
-          enviado_telegram: !simulada,
+          enviado_telegram: enviadoTelegram,
         }, { onConflict: "idempotency_key" })
         .select("id")
         .single();
@@ -446,6 +497,221 @@ Pode confirmar sua presença?`;
       folguistasParaConfirmar,
       simulada,
       logsCriados,
+    };
+  }
+
+  /**
+   * Simulação Pura de Resposta de Folguista (Gate 3 - Isolamento Total)
+   * NUNCA grava em folguistas_disponibilidade, colaborador_escalas ou tabelas operacionais.
+   * Apenas avalia em memória e projeta as ações que seriam executadas.
+   */
+  static simulateFolguistaResponse(params: {
+    colaboradorId: string;
+    colaboradorNome: string;
+    rawText: string;
+    isFridayContext?: boolean;
+    weekend: WeekendDates;
+  }): SimulacaoRespostaFolguistaResult {
+    const { colaboradorId, colaboradorNome, rawText, isFridayContext = false, weekend } = params;
+
+    const parsed = parseFolguistaMessage(rawText, {
+      colaboradorId,
+      colaboradorNome,
+      isFridayConfirmationContext: isFridayContext,
+    });
+
+    const acoesPropostas: AcaoPropostaSimulada[] = [];
+
+    if (parsed.tipoMensagem === "desistencia") {
+      acoesPropostas.push({
+        tipo: "desistencia",
+        data: parsed.dias.sabado.desistencia ? weekend.sabado : weekend.domingo,
+        turno: "qualquer",
+        descricao: "Desistência comunicada por imprevisto",
+        detalhes: `Liberar vaga de ${colaboradorNome} e iniciar busca automática por substituto elegível.`,
+      });
+    } else if (parsed.tipoMensagem === "confirmacao_presenca") {
+      acoesPropostas.push({
+        tipo: "confirmacao",
+        data: parsed.dias.sabado.confirmado ? weekend.sabado : weekend.domingo,
+        turno: "qualquer",
+        descricao: "Confirmação explícita de presença",
+        detalhes: `Status do turno de ${colaboradorNome} passaria para 'confirmado' na escala oficial.`,
+      });
+    } else if (parsed.disponibilidadeGeral === "indisponivel") {
+      acoesPropostas.push({
+        tipo: "indisponibilidade",
+        data: weekend.sabado,
+        turno: "qualquer",
+        descricao: "Indisponibilidade comunicada",
+        detalhes: `${colaboradorNome} não poderá cobrir turnos neste fim de semana (${weekend.sabadoFormatado} e ${weekend.domingoFormatado}).`,
+      });
+    } else if (parsed.dias.sabado.disponivel || parsed.dias.domingo.disponivel || parsed.disponibilidadeGeral === "disponivel") {
+      if (parsed.dias.sabado.disponivel) {
+        const turnosSab = parsed.dias.sabado.turnos.length > 0 ? parsed.dias.sabado.turnos : ["qualquer" as TurnoId];
+        for (const t of turnosSab) {
+          acoesPropostas.push({
+            tipo: "disponibilidade",
+            data: weekend.sabado,
+            turno: t,
+            descricao: `Disponível para Sábado (${t})`,
+            detalhes: `Registraria disponibilidade de ${colaboradorNome} para Sábado (${weekend.sabadoFormatado}) no turno ${t}.`,
+          });
+        }
+      }
+      if (parsed.dias.domingo.disponivel) {
+        const turnosDom = parsed.dias.domingo.turnos.length > 0 ? parsed.dias.domingo.turnos : ["qualquer" as TurnoId];
+        for (const t of turnosDom) {
+          acoesPropostas.push({
+            tipo: "disponibilidade",
+            data: weekend.domingo,
+            turno: t,
+            descricao: `Disponível para Domingo (${t})`,
+            detalhes: `Registraria disponibilidade de ${colaboradorNome} para Domingo (${weekend.domingoFormatado}) no turno ${t}.`,
+          });
+        }
+      }
+      if (acoesPropostas.length === 0) {
+        acoesPropostas.push({
+          tipo: "disponibilidade",
+          data: weekend.sabado,
+          turno: "qualquer",
+          descricao: "Disponível para o fim de semana",
+          detalhes: `Disponibilidade ampla registrada para ${colaboradorNome}.`,
+        });
+      }
+    } else if (parsed.precisaClarificacao) {
+      acoesPropostas.push({
+        tipo: "ambigua",
+        data: weekend.sabado,
+        turno: "qualquer",
+        descricao: "Mensagem requer esclarecimento",
+        detalhes: parsed.perguntaClarificacao || "Perguntar se prefere turno da manhã (05h) ou noite.",
+      });
+    }
+
+    return {
+      sucesso: true,
+      simulada: true,
+      colaboradorId,
+      colaboradorNome,
+      textoOriginal: rawText,
+      interpretacao: parsed,
+      acoesPropostas,
+      resumoAcao: acoesPropostas.map((a) => a.descricao).join(" | ") || "Nenhuma alteração simulada.",
+    };
+  }
+
+  /**
+   * Aplicação Real Autorizada de Resposta de Folguista (Gate 3)
+   * Executa a gravação em folguistas_disponibilidade e atualiza status de confirmação.
+   */
+  static async applyRealFolguistaResponse(params: {
+    workspaceId: string;
+    colaboradorId: string;
+    colaboradorNome?: string;
+    rawText: string;
+    isFridayContext?: boolean;
+    weekend: WeekendDates;
+    origem?: "telegram" | "manual" | "whatsapp";
+  }): Promise<{ sucesso: boolean; mensagem: string; logsGravados: number }> {
+    const {
+      workspaceId,
+      colaboradorId,
+      colaboradorNome = "Folguista",
+      rawText,
+      isFridayContext = false,
+      weekend,
+      origem = "manual",
+    } = params;
+
+    const parsed = parseFolguistaMessage(rawText, {
+      colaboradorId,
+      colaboradorNome,
+      isFridayConfirmationContext: isFridayContext,
+    });
+
+    let logsGravados = 0;
+
+    if (parsed.disponibilidadeGeral === "disponivel" || parsed.dias.sabado.disponivel || parsed.dias.domingo.disponivel) {
+      const turnosSab = parsed.dias.sabado.turnos.length > 0 ? parsed.dias.sabado.turnos : ["qualquer" as TurnoId];
+      for (const t of turnosSab) {
+        const { error } = await supabase
+          .from("folguistas_disponibilidade")
+          .upsert(
+            {
+              workspace_id: workspaceId,
+              colaborador_id: colaboradorId,
+              data_referencia: weekend.sabado,
+              turno: t,
+              disponivel: true,
+              confirmado: parsed.tipoMensagem === "confirmacao_presenca",
+              origem,
+              resposta_raw: rawText,
+            },
+            { onConflict: "colaborador_id,data_referencia,turno" }
+          );
+        if (!error) logsGravados += 1;
+      }
+
+      const turnosDom = parsed.dias.domingo.turnos.length > 0 ? parsed.dias.domingo.turnos : ["qualquer" as TurnoId];
+      for (const t of turnosDom) {
+        const { error } = await supabase
+          .from("folguistas_disponibilidade")
+          .upsert(
+            {
+              workspace_id: workspaceId,
+              colaborador_id: colaboradorId,
+              data_referencia: weekend.domingo,
+              turno: t,
+              disponivel: true,
+              confirmado: parsed.tipoMensagem === "confirmacao_presenca",
+              origem,
+              resposta_raw: rawText,
+            },
+            { onConflict: "colaborador_id,data_referencia,turno" }
+          );
+        if (!error) logsGravados += 1;
+      }
+    } else if (parsed.disponibilidadeGeral === "indisponivel") {
+      const { error: errSab } = await supabase
+        .from("folguistas_disponibilidade")
+        .upsert(
+          {
+            workspace_id: workspaceId,
+            colaborador_id: colaboradorId,
+            data_referencia: weekend.sabado,
+            turno: "qualquer",
+            disponivel: false,
+            confirmado: false,
+            origem,
+            resposta_raw: rawText,
+          },
+          { onConflict: "colaborador_id,data_referencia,turno" }
+        );
+      const { error: errDom } = await supabase
+        .from("folguistas_disponibilidade")
+        .upsert(
+          {
+            workspace_id: workspaceId,
+            colaborador_id: colaboradorId,
+            data_referencia: weekend.domingo,
+            turno: "qualquer",
+            disponivel: false,
+            confirmado: false,
+            origem,
+            resposta_raw: rawText,
+          },
+          { onConflict: "colaborador_id,data_referencia,turno" }
+        );
+      if (!errSab) logsGravados += 1;
+      if (!errDom) logsGravados += 1;
+    }
+
+    return {
+      sucesso: true,
+      mensagem: `Resposta real de ${colaboradorNome} processada e gravada com sucesso (${logsGravados} registros).`,
+      logsGravados,
     };
   }
 

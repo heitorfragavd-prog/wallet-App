@@ -4715,6 +4715,116 @@ serve(async (req) => {
       }
     }
 
+    // ─── 0.0. CENTRAL DE FOLGUISTAS E ESCALAS (Gate 6 & Gate 10) ───
+    if (isGroup && grupoConfig?.tipo_grupo === "folguistas") {
+      const isGreeting = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "/start", "/ajuda", "escalas", "escala"].includes(respLower);
+      if (isGreeting) {
+        await sendReply(
+          `👥 <b>Central de Escalas e Folguistas Rodo Point</b>\n\n` +
+          `Olá! Eu sou o assistente de escalas da Rodo Point.\n\n` +
+          `📌 <b>Como funciona:</b>\n` +
+          `• <b>Segundas-feiras:</b> consulta de disponibilidade para o próximo fim de semana.\n` +
+          `• <b>Sextas-feiras:</b> reconfirmação de presença para quem está escalado.\n` +
+          `• <b>Respostas:</b> responda com naturalidade (ex: <i>"Posso sábado de manhã"</i>, <i>"Confirmado!"</i> ou avise imprevistos).\n\n` +
+          `🔒 <i>Lembrete: Este grupo é focado exclusivamente em escalas. Dados financeiros da empresa são estritamente sigilosos.</i>`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // ─── Salvaguarda de Sigilo Financeiro (Gate 10) ───
+      const financialKeywords = ["lucro", "faturamento", "dre", "saldo", "banco", "divida", "dívida", "pagamento fornecedor", "quanto faturou", "quanto sobrou"];
+      const containsFinancialQuestion = financialKeywords.some((kw) => respLower.includes(kw));
+      if (containsFinancialQuestion) {
+        await sendReply(
+          `🔒 <b>Sigilo Operacional:</b>\n` +
+          `Por normas de segurança e privacidade da empresa, dados financeiros, lucros e saldos não são compartilhados no grupo de escalas. Para dúvidas financeiras, consulte a administração diretamente.`
+        );
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Identifica o colaborador remetente
+      const senderName = [message.from?.first_name, message.from?.last_name].filter(Boolean).join(" ");
+
+      // Busca colaboradores folguistas no workspace
+      const { data: colabs } = await supabase
+        .from("colaboradores")
+        .select("id, nome, tipo, status, telefone")
+        .eq("workspace_id", workspaceId)
+        .neq("status", "inativo");
+
+      let matchedColab: { id: string; nome: string } | null = null;
+      if (colabs && colabs.length > 0) {
+        matchedColab = colabs.find((c: { nome: string }) => {
+          const cNorm = c.nome.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          const sNorm = senderName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+          return sNorm && (cNorm.includes(sNorm) || sNorm.includes(cNorm.split(" ")[0]));
+        }) || null;
+      }
+
+      const colabId = matchedColab?.id || null;
+      const colabNome = matchedColab?.nome || senderName || "Folguista";
+
+      // Processa a mensagem pelo parser compartilhado
+      const { parseFolguistaMessage, getNextWeekendDatesSaoPaulo } = await import("../_shared/ai/folguista-parser-shared.ts");
+      const parsed = parseFolguistaMessage(text, {
+        colaboradorId: colabId || undefined,
+        colaboradorNome: colabNome,
+        isFridayConfirmationContext: new Date().getDay() === 5 || respLower.includes("confirmad") || respLower.includes("imprevist"),
+      });
+
+      const weekendDates = getNextWeekendDatesSaoPaulo();
+      if (colabId) {
+        if (parsed.disponibilidadeGeral === "disponivel" || parsed.dias.sabado.disponivel || parsed.dias.domingo.disponivel) {
+          if (parsed.dias.sabado.disponivel) {
+            const turnosSab = parsed.dias.sabado.turnos.length > 0 ? parsed.dias.sabado.turnos : ["qualquer"];
+            for (const t of turnosSab) {
+              await supabase.from("folguistas_disponibilidade").upsert({
+                workspace_id: workspaceId,
+                colaborador_id: colabId,
+                data_referencia: weekendDates.sabado,
+                turno: t,
+                disponivel: true,
+                confirmado: parsed.tipoMensagem === "confirmacao_presenca",
+                origem: "telegram",
+                resposta_raw: text,
+              }, { onConflict: "colaborador_id,data_referencia,turno" });
+            }
+          }
+          if (parsed.dias.domingo.disponivel) {
+            const turnosDom = parsed.dias.domingo.turnos.length > 0 ? parsed.dias.domingo.turnos : ["qualquer"];
+            for (const t of turnosDom) {
+              await supabase.from("folguistas_disponibilidade").upsert({
+                workspace_id: workspaceId,
+                colaborador_id: colabId,
+                data_referencia: weekendDates.domingo,
+                turno: t,
+                disponivel: true,
+                confirmado: parsed.tipoMensagem === "confirmacao_presenca",
+                origem: "telegram",
+                resposta_raw: text,
+              }, { onConflict: "colaborador_id,data_referencia,turno" });
+            }
+          }
+        } else if (parsed.tipoMensagem === "desistencia") {
+          await supabase.from("folguistas_disponibilidade").upsert({
+            workspace_id: workspaceId,
+            colaborador_id: colabId,
+            data_referencia: weekendDates.sabado,
+            turno: "qualquer",
+            disponivel: false,
+            confirmado: false,
+            origem: "telegram",
+            resposta_raw: text,
+          }, { onConflict: "colaborador_id,data_referencia,turno" });
+        }
+      }
+
+      await sendReply(
+        `💬 <b>Wallet IA:</b>\n${parsed.respostaConfirmacaoAgradecimento || "Obrigado pela resposta! Registrado com sucesso."}`
+      );
+      return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
     // ─── 0.0. FECHAMENTO DE CAIXA: SOBRA (Grupo Fechamento ou Chat) ───
     const matchSobra = text.match(/sobra[:\s]*R?\$?\s*([\d.,]+)/i);
     if (matchSobra) {
