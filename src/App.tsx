@@ -68,6 +68,7 @@ const WalletCeoPage       = lazyWithRetry(() => import("./pages/WalletCeoPage"))
 const WalletDeliveryPage  = lazyWithRetry(() => import("./pages/WalletDeliveryPage"));
 const DeliveryKDSPage     = lazyWithRetry(() => import("./pages/DeliveryKDSPage"));
 const CentralConversasPage = lazyWithRetry(() => import("./pages/CentralConversasPage"));
+const EscalasFolguistasPage = lazyWithRetry(() => import("./pages/EscalasFolguistasPage"));
 
 // Rotas admin — carregadas somente para admins
 const AdminDashboard      = lazyWithRetry(() => import("./pages/AdminDashboard"));
@@ -151,6 +152,8 @@ function App() {
                   <Route path="/configuracoes/notificacoes" element={<ProtectedRoute><ConfiguracoesNotificacoes /></ProtectedRoute>} />
                   <Route path="/pdv"           element={<ProtectedRoute><PDVPage /></ProtectedRoute>} />
                   <Route path="/conversas"     element={<ProtectedRoute><CentralConversasPage /></ProtectedRoute>} />
+                  <Route path="/escalas"       element={<ProtectedRoute><EscalasFolguistasPage /></ProtectedRoute>} />
+                  <Route path="/folguistas"    element={<ProtectedRoute><EscalasFolguistasPage /></ProtectedRoute>} />
                   <Route path="/ceo"           element={<ProtectedRoute><CeoRoleGuard><WalletCeoPage /></CeoRoleGuard></ProtectedRoute>} />
                   <Route path="/wallet-ceo"    element={<ProtectedRoute><CeoRoleGuard><WalletCeoPage /></CeoRoleGuard></ProtectedRoute>} />
                   <Route path="/delivery"      element={<ProtectedRoute><WalletDeliveryPage /></ProtectedRoute>} />
