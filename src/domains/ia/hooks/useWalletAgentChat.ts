@@ -1,5 +1,6 @@
 import { useState, useCallback, useRef } from "react";
 import type { LlmMessage, ExecutedToolRecord } from "../../../../supabase/functions/_shared/ai/orchestrator-core";
+import type { ActionProposal } from "../../../../supabase/functions/_shared/ai/action-types";
 import {
   WalletAiOrchestratorClient,
   WalletAiOrchestratorError,
@@ -11,6 +12,7 @@ export interface ChatMessage {
   content: string;
   channel?: "web" | "telegram";
   toolCalls?: ExecutedToolRecord[];
+  actionProposals?: ActionProposal[];
   createdAt: Date;
   isError?: boolean;
 }
@@ -87,6 +89,7 @@ export function useWalletAgentChat(options: UseWalletAgentChatOptions) {
           content: response.message?.content ?? (typeof response.message === "string" ? response.message : ""),
           channel: "web",
           toolCalls: response.toolCalls,
+          actionProposals: response.actionProposals,
           createdAt: new Date(),
         };
 
