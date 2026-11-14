@@ -1582,6 +1582,11 @@ export async function handleOrchestratorHttpRequest(
     // Injeção de Contexto do Especialista Designado ou Coordenação Multidepartamental
     if (routingPlan.coordinatingCeo && !resolvedGroupContext) {
       chosenSystemPrompt += `\n\n[COORDENAÇÃO EXECUTIVA WALLET CEO: MULTIDEPARTAMENTAL]\nVocê está coordenando os seguintes especialistas: ${routingPlan.contributingSpecialists.map((s) => SPECIALIST_AGENTS_REGISTRY[s]?.name || s).join(", ")}.\nSintetize a resposta com visão executiva holística cruzando faturamento bruto (PDV), CMV de insumos (Estoque) e despesas operacionais/lucro líquido (Financeiro).`;
+    } else if (effectiveAgentType === "ceo") {
+      // Wallet CEO preserva sua persona de parceiro de gestão executivo; incorpora contexto especialista apenas se relevante e não-genérico
+      if (primarySpecialistContract && routingPlan.primarySpecialist !== "operacoes" && !resolvedGroupContext) {
+        chosenSystemPrompt += `\n\n[APOIO ESPECIALIZADO: ${primarySpecialistContract.name} — ${primarySpecialistContract.department}]\n${primarySpecialistContract.systemPromptSnippet}`;
+      }
     } else if (primarySpecialistContract) {
       chosenSystemPrompt += `\n\n[ESPECIALISTA DESIGNADO: ${primarySpecialistContract.name} — ${primarySpecialistContract.department}]\n${primarySpecialistContract.systemPromptSnippet}`;
     }

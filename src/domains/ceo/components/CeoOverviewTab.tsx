@@ -28,7 +28,7 @@ import {
   YAxis,
   Tooltip,
 } from 'recharts';
-import { useWalletIA, type WalletIAMessage } from '@/domains/ia/hooks/useWalletIA';
+import { useWalletAgentChat, type ChatMessage } from '@/domains/ia/hooks/useWalletAgentChat';
 import { WalletAiOrchestratorClient } from '@/domains/ia/services/WalletAiOrchestratorClient';
 import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { CeoIntelligenceEngine } from '@/domains/ceo/services/CeoIntelligenceEngine';
@@ -37,10 +37,12 @@ import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useAuth } from '@/domains/auth/hooks/useAuth';
 
-interface CeoOverviewTabProps {
+export interface CeoOverviewTabProps {
   workspaceId: string;
   kpis: CeoExecutiveKpis;
   onNavigateToPlan?: () => void;
+  onSelectTab?: (tab: string) => void;
+  onNavigateToBrainCeo?: () => void;
 }
 
 interface ConversationItem {
@@ -54,6 +56,8 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   workspaceId,
   kpis,
   onNavigateToPlan,
+  onSelectTab,
+  onNavigateToBrainCeo,
 }) => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -78,247 +82,34 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
   const [showHistoryModal, setShowHistoryModal] = useState(false);
   const [loadingHistory, setLoadingHistory] = useState(false);
 
-  // Resposta rápida canônica sincronizada com as métricas reais do painel executivo
-  const fastQueryFn = useCallback(
-    (pergunta: string): string => {
-      const p = pergunta.toLowerCase();
 
-      // 0. Pergunta sobre CMV, custos de atacado ou fornecedores de bebidas (Coca-Cola / Ambev)
-      if (
-        p.includes('cmv') ||
-        p.includes('custo de mercadoria') ||
-        p.includes('custo unitario') ||
-        p.includes('custo unitário') ||
-        p.includes('custo de compra') ||
-        p.includes('quanto custa') ||
-        p.includes('preco de custo') ||
-        p.includes('preço de custo') ||
-        p.includes('cotação') ||
-        p.includes('cotacao') ||
-        p.includes('fornecedor') ||
-        p.includes('spal') ||
-        p.includes('brasnorte') ||
-        p.includes('ambev') ||
-        p.includes('coca-cola') ||
-        p.includes('coca ks')
-      ) {
-        const cmvConf = kpis.cmvConfirmado;
-        const recConf = kpis.receitaComCustoConhecido;
-        const cob = kpis.coberturaCmvPercent ?? 0;
-        const lucroConf = kpis.lucroBrutoConfirmado;
-        const margemConf = kpis.margemBrutaConfirmadaPercent;
 
-        let cmvInfo = '';
-        if (cmvConf !== null && cmvConf !== undefined && cmvConf > 0) {
-          cmvInfo = `- **CMV Confirmado (Notas Fiscais):** **R$ ${cmvConf.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**` +
-            ` (${kpis.cmvPercent ?? 0}% sobre R$ ${(recConf || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })} com custo auditado)\n` +
-            `- **Lucro Bruto Comprovado:** **R$ ${(lucroConf ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}** (Margem Média de ${margemConf ?? 0}%)\n` +
-            `- **Cobertura de Custos:** ${cob}% do faturamento do mês auditado por notas fiscais.\n\n`;
-        } else {
-          cmvInfo = `- **CMV Auditado:** R$ 0,00 (aguardando vinculação de notas fiscais de entrada de mercadorias).\n` +
-            `- **Cobertura:** ${cob}% do faturamento coberto por NF no período.\n\n`;
-        }
+  // Cliente orquestrador canônico para consulta de IA unificada
+  const client = useMemo(() => {
+    return new WalletAiOrchestratorClient({
+      baseUrl: `${import.meta.env.VITE_SUPABASE_URL || ''}/functions/v1/wallet-ai-orchestrator`,
+      getAccessToken: async () => {
+        const { data } = await supabase.auth.getSession();
+        return data.session?.access_token ?? null;
+      },
+    });
+  }, []);
 
-        return `🛒 **Custos de Atacado & CMV Comprovado (Rodo Point):**\n\n` +
-          cmvInfo +
-          `> 💡 Os custos unitários e CMV são calculados exclusivamente com base em notas fiscais de compra e fichas técnicas cadastradas.`;
-      }
-
-      // 0.1 Pergunta sobre produtos mais lucrativos ou maiores margens
-      if (
-        p.includes('mais lucrativo') ||
-        p.includes('maior margem') ||
-        p.includes('melhor margem') ||
-        p.includes('maiores margens') ||
-        p.includes('rentabilidade') ||
-        p.includes('lucro por produto') ||
-        p.includes('lucro dos produtos')
-      ) {
-        const prods = kpis.topProducts || [];
-        if (prods.length > 0) {
-          const prodsText = prods
-            .slice(0, 5)
-            .map(
-              (pr) =>
-                `• **${pr.produto}**: ${pr.quantidade} un — Faturamento R$ ${pr.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (${pr.percentualFaturamento}% do total)`
-            )
-            .join('\n');
-          return `💰 **Principais Produtos em Faturamento e Rentabilidade (PDV Rodo Point):**\n\n` +
-            `${prodsText}\n\n` +
-            `> 💡 Apurado diretamente a partir do histórico de vendas do PDV Eyemobile. A margem individual por item reflete as fichas técnicas cadastradas em Estoque.`;
-        }
-        return `💰 **Ranking de Lucratividade dos Produtos:**\n\nDados de vendas ou custos ainda insuficientes no período para gerar o ranking de margens.`;
-      }
-
-      // 1. Pergunta sobre produtos mais vendidos
-      if (
-        p.includes('produto') ||
-        p.includes('mais vendido') ||
-        p.includes('venderam mais') ||
-        p.includes('itens mais') ||
-        p.includes('top produto')
-      ) {
-        const prods = kpis.topProducts || [];
-        if (prods.length > 0) {
-          const rankingTxt = prods
-            .map(
-              (pr) =>
-                `  ${pr.rank}. **${pr.produto}**: ${pr.quantidade} un — R$ ${pr.faturamento.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (${pr.percentualFaturamento}% do faturamento)`
-            )
-            .join('\n');
-          return `🏆 **Top Produtos Mais Vendidos (PDV Rodo Point):**\n\n${rankingTxt}\n\n> 💡 Apurado canonicamente a partir dos itens registrados nas vendas PDV.`;
-        }
-        return `🏆 **Top Produtos Mais Vendidos:**\n\nNenhum item individualizado registrado para o período consultado.`;
-      }
-
-      // 2. Pergunta sobre quantidade de vendas / pedidos
-      if (
-        p.includes('quantas vendas') ||
-        p.includes('quantos pedidos') ||
-        p.includes('quantidade de vendas') ||
-        p.includes('quantidade de pedidos') ||
-        p.includes('total de pedidos')
-      ) {
-        const pedMes = kpis.pedidosMes || 0;
-        const fatMes = kpis.faturamentoMes || 0;
-        const tm = kpis.ticketMedioMes || 0;
-        const cresc = kpis.crescimentoPedidos;
-        const crescTxt =
-          cresc !== null && cresc !== undefined
-            ? ` (${cresc >= 0 ? '+' : ''}${cresc}% vs mês anterior)`
-            : '';
-        return `📦 **Volume de Vendas Deste Mês (Rodo Point):**\n\n- **Total de vendas concluídas:** **${pedMes} pedidos**${crescTxt}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n- **Faturamento acumulado:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Apurado canonicamente com deduplicação de transações do PDV Eyemobile.`;
-      }
-
-      // 3. Pergunta sobre resultado operacional / lucro líquido real
-      if (
-        p.includes('lucro líquido') ||
-        p.includes('lucro liquido') ||
-        p.includes('resultado operacional') ||
-        p.includes('resultado') ||
-        p.includes('lucro') ||
-        p.includes('margem operacional')
-      ) {
-        const fatMes = kpis.faturamentoMes || 0;
-        const cob = kpis.coberturaCustosLucroPercent ?? kpis.coberturaCmvPercent ?? 0;
-        const resOperacional = kpis.resultadoOperacional || 0;
-        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
-        const despPagas = kpis.despesasPagas || 0;
-        const cmvFormatado = kpis.cmvConfirmado !== null && kpis.cmvConfirmado !== undefined
-          ? `R$ ${kpis.cmvConfirmado.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`
-          : 'R$ 0,00 (pendente de NF)';
-
-        return `💼 **Demonstrativo de Resultado & Rentabilidade (Rodo Point):**\n\n` +
-          `1️⃣ **Resultado Operacional (Competência do Mês):**\n` +
-          `- **Vendas Brutas (PDV Reconciliadas):** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **(-) CMV Auditado por NF:** ${cmvFormatado} (${cob}% de cobertura)\n` +
-          `- **(-) Despesas Operacionais (Competência):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **(=) Resultado Operacional:** **R$ ${resOperacional.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}** (Margem: ${kpis.margemOperacional ?? 0}%)\n\n` +
-          `2️⃣ **Visão de Fluxo de Caixa (Desembolsos Pagos no Período):**\n` +
-          `- **Entradas Vendas:** R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **Despesas Pagas no Caixa:** R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n` +
-          `- **Saldo de Caixa (Vendas - Pagamentos):** R$ ${(kpis.diferencaVendasDespesasPagas ?? (fatMes - despPagas)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n\n` +
-          `> 💡 Dados apurados em tempo real diretamente das vendas do Eyemobile PDV e lançamentos contábeis.`;
-      }
-
-      // 4. Pergunta sobre vendas/faturamento de ontem
-      if (p.includes('ontem')) {
-        const valOntem = kpis.faturamentoOntem || 0;
-        const mediaOntem = kpis.mediaDiaSemanaOntem || 0;
-        const diaNome = kpis.diaSemanaOntemNome || 'ontem';
-        const varPct = kpis.variacaoOntemVsMedia;
-        const varTxt =
-          varPct !== null && varPct !== undefined
-            ? ` (${varPct >= 0 ? '+' : ''}${varPct}% em relação à média)`
-            : '';
-        return `🏪 **Vendas de Ontem (${diaNome}):**\n\n- **Faturamento apurado:** **R$ ${valOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}**${varTxt}\n- **Média histórica das ${diaNome}s:** R$ ${mediaOntem.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}\n\n> 💡 Apurado canonicamente a partir das transações PDV da Rodo Point.`;
-      }
-
-      // 5. Pergunta sobre mês atual ou faturamento do mês
-      if (
-        (p.includes('fatur') || p.includes('vend') || p.includes('receit')) &&
-        (p.includes('mes') || p.includes('mês') || p.includes('atual'))
-      ) {
-        const fatMes = kpis.faturamentoMes || 0;
-        const pedMes = kpis.pedidosMes || 0;
-        const tm = kpis.ticketMedioMes || 0;
-        const cresc = kpis.crescimentoMes;
-        const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
-        const crescTxt =
-          cresc !== null && cresc !== undefined
-            ? ` (${cresc >= 0 ? '+' : ''}${cresc}% vs mês anterior)`
-            : '';
-        return `📊 **Vendas Brutas Deste Mês (PDV Rodo Point):**\n\n- **Vendas brutas apuradas:** **R$ ${fatMes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**${crescTxt}\n- **Pedidos concluídos:** ${pedMes}\n- **Ticket Médio:** R$ ${tm.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Preliminar (Competência):** R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)\n\n> 💡 Apurado canonicamente com deduplicação de transações do PDV Eyemobile.`;
-      }
-
-      // 6. Pergunta sobre despesas
-      if (p.includes('despesa') || p.includes('gasto') || p.includes('custo') || p.includes('gastamos') || p.includes('contas a pagar')) {
-        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
-        const despPagas = kpis.despesasPagas || 0;
-        const despPend = kpis.despesasPendentes || 0;
-        const varDesp = kpis.variacaoDespesasPercent;
-        const varDespTxt =
-          varDesp !== null && varDesp !== undefined
-            ? ` (${varDesp >= 0 ? '+' : ''}${varDesp}% vs mês anterior)`
-            : '';
-
-        return `💳 **Detalhamento das Despesas Deste Mês (Rodo Point):**\n\n` +
-          `1️⃣ **Despesas Totais por Competência (Mês Atual):** **R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**${varDespTxt}\n` +
-          `2️⃣ **Despesas Pagas (Fluxo de Caixa):** **R$ ${despPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**\n` +
-          `3️⃣ **Despesas Pendentes / A Pagar:** **R$ ${despPend.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}**\n\n` +
-          `> 💡 Dados sincronizados a partir dos lançamentos e conciliações financeiras oficiais.`;
-      }
-
-      // Resumo executivo rápido
-      if (p.includes('resumo') || p.includes('como estamos') || p.includes('painel')) {
-        const resComp = kpis.resultadoPreliminarCompetencia ?? kpis.resultadoOperacional ?? 0;
-        const despTotal = kpis.despesasTotalCompetencia || kpis.despesasMes || 0;
-        return `📈 **Resumo Executivo Rodo Point:**\n\n- **Vendas Brutas (Mês):** R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas Totais (Competência):** R$ ${despTotal.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Despesas Pagas (Caixa):** R$ ${(kpis.despesasPagas || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- **Resultado Preliminar (Competência):** R$ ${resComp.toLocaleString('pt-BR', { minimumFractionDigits: 2 })} (Margem ${kpis.margemOperacional ?? 0}%)\n- **Vendas de Ontem:** R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-      }
-
-      return `📊 **Painel Executivo CEO:**\n- Faturamento Mês: R$ ${(kpis.faturamentoMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- Faturamento Ontem: R$ ${(kpis.faturamentoOntem || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}\n- Despesas Mês: R$ ${(kpis.despesasMes || 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}`;
-    },
-    [kpis]
-  );
-
-  const dadosFinanceiros = useMemo(
-    () => ({
-      receitas: [{ valor: kpis.faturamentoMes || 0, data: new Date().toISOString() }],
-      despesas: [{ valor: kpis.despesasMes || 0, data: new Date().toISOString() }],
-      contas: [],
-    }),
-    [kpis.faturamentoMes, kpis.despesasMes]
-  );
-
-  // Hook central de IA com conversaId conectado e dados do painel sincronizados
-  const { messages, isLoading, sendMessage, clearChat, loadHistory } = useWalletIA({
-    workspaceId,
-    conversaId: conversaId || undefined,
-    dadosFinanceiros,
-    fastQueryFn,
-    onMessagePersist: async (msg, targetId) => {
-      if (!workspaceId || !user?.id || !targetId) return;
-      try {
-        if (msg.routeUsed === 'FAST_QUERY' || msg.isError) {
-          await supabase.from('wallet_ai_messages').insert({
-            conversation_id: targetId,
-            workspace_id: workspaceId,
-            user_id: user.id,
-            role: msg.role,
-            content: msg.content,
-          });
-        }
-        await supabase
-          .from('wallet_ai_conversations')
-          .update({ updated_at: new Date().toISOString() })
-          .eq('id', targetId)
-          .eq('workspace_id', workspaceId)
-          .eq('user_id', user.id);
-      } catch (err) {
-        console.warn('[CeoOverviewTab] Falha ao persistir mensagem no histórico:', err);
-      }
-    },
-  });
+  // Hook canônico compartilhado com o Cérebro CEO (agentType = 'ceo')
+  const { messages, setMessages, isLoading, currentStatus, sendMessage, clearChat } =
+    useWalletAgentChat({
+      workspaceId,
+      client,
+      agentType: 'ceo',
+      conversationId: conversaId || undefined,
+      onError: (err) => {
+        toast({
+          title: 'Aviso do Wallet CEO',
+          description: err.message,
+          variant: 'destructive',
+        });
+      },
+    });
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -330,41 +121,90 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
     }
   }, [messages]);
 
-  // Carrega mensagens de uma conversa específica (Gate 1)
-  const loadConversationMessages = useCallback(async (convId: string) => {
-    if (!convId || !workspaceId || !user?.id) return;
-    setLoadingHistory(true);
-    try {
-      const { data, error } = await supabase
-        .from('wallet_ai_messages')
-        .select('id, role, content, created_at, tool_calls')
-        .eq('conversation_id', convId)
-        .eq('workspace_id', workspaceId)
-        .eq('user_id', user.id)
-        .order('created_at', { ascending: true });
+  // Carrega mensagens de uma conversa específica sincronizada
+  const loadConversationMessages = useCallback(
+    async (convId: string) => {
+      if (!convId || !workspaceId || !user?.id) return;
+      setLoadingHistory(true);
+      try {
+        const { data, error } = await supabase
+          .from('wallet_ai_messages')
+          .select('id, role, content, channel, created_at')
+          .eq('conversation_id', convId)
+          .eq('workspace_id', workspaceId)
+          .eq('user_id', user.id)
+          .order('created_at', { ascending: true });
 
-      if (error) {
-        console.warn('[CeoOverviewTab] Erro ao carregar mensagens:', error);
-        return;
-      }
+        if (error) {
+          console.warn('[CeoOverviewTab] Erro ao carregar mensagens:', error);
+          return;
+        }
 
-      if (data && data.length > 0) {
-        const loaded: WalletIAMessage[] = data.map((m) => ({
-          id: m.id,
-          role: m.role as 'user' | 'assistant',
-          content: m.content || '',
-          createdAt: new Date(m.created_at),
-        }));
-        loadHistory(loaded);
-      } else {
-        loadHistory([]);
+        if (data && data.length > 0) {
+          setMessages(
+            data.map((m) => ({
+              id: m.id,
+              role: m.role as 'user' | 'assistant' | 'system',
+              content: m.content || '',
+              channel: (m.channel as 'web' | 'telegram') || 'web',
+              createdAt: new Date(m.created_at),
+            }))
+          );
+        } else {
+          setMessages([]);
+        }
+      } catch (err) {
+        console.error('[CeoOverviewTab] Erro ao recuperar histórico:', err);
+      } finally {
+        setLoadingHistory(false);
       }
-    } catch (err) {
-      console.error('[CeoOverviewTab] Erro ao recuperar histórico:', err);
-    } finally {
-      setLoadingHistory(false);
-    }
-  }, [workspaceId, user?.id, loadHistory]);
+    },
+    [workspaceId, user?.id, setMessages]
+  );
+
+  // Sincronização em tempo real entre Visão Geral e Cérebro CEO
+  useEffect(() => {
+    if (!conversaId) return;
+
+    const channel = supabase
+      .channel(`wallet_ai_overview_sync_${conversaId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'INSERT',
+          schema: 'public',
+          table: 'wallet_ai_messages',
+          filter: `conversation_id=eq.${conversaId}`,
+        },
+        (payload) => {
+          const newMsg = payload.new as {
+            id: string;
+            role: string;
+            content: string;
+            channel?: string;
+            created_at: string;
+          };
+          setMessages((prev) => {
+            if (prev.some((m) => m.id === newMsg.id)) return prev;
+            return [
+              ...prev,
+              {
+                id: newMsg.id,
+                role: newMsg.role as 'user' | 'assistant' | 'system',
+                content: newMsg.content || '',
+                channel: (newMsg.channel as 'web' | 'telegram') || 'web',
+                createdAt: new Date(newMsg.created_at),
+              },
+            ];
+          });
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [conversaId, setMessages]);
 
   // Inicializa a lista de conversas e seleciona a mais recente
   const initConversations = useCallback(async () => {
@@ -410,13 +250,13 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
         } else if (newConv) {
           setConversations([newConv]);
           setConversaId(newConv.id);
-          loadHistory([]);
+          setMessages([]);
         }
       }
     } catch (err) {
       console.error('[CeoOverviewTab] Falha ao inicializar conversas:', err);
     }
-  }, [workspaceId, user?.id, loadConversationMessages, loadHistory]);
+  }, [workspaceId, user?.id, loadConversationMessages, setMessages]);
 
   useEffect(() => {
     initConversations();
@@ -761,9 +601,23 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                   </div>
                 )}
                 {kpis.despesasPagas > 0 ? (
-                  <div className="flex flex-wrap items-center justify-between gap-1 text-[10px] text-slate-400">
-                    <span>Pagas: R$ {kpis.despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
-                    <span>Pend: R$ {kpis.despesasPendentes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                  <div className="flex flex-col gap-0.5 text-[10px] text-slate-400">
+                    <div className="flex items-center justify-between">
+                      <span>Caixa Hoje:</span>
+                      <span className="text-emerald-400 font-medium">
+                        R$ {(kpis.diferencaVendasDespesasPagas ?? (kpis.faturamentoMes - kpis.despesasPagas)).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between">
+                      <span>DRE Mês (Competência):</span>
+                      <span className={(kpis.lucroLiquidoReal ?? kpis.resultadoPreliminarCompetencia ?? 0) >= 0 ? 'text-emerald-400' : 'text-rose-400'}>
+                        R$ {(kpis.lucroLiquidoReal ?? kpis.resultadoPreliminarCompetencia ?? 0).toLocaleString('pt-BR', { minimumFractionDigits: 2 })}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between text-slate-500 pt-0.5 border-t border-border/20">
+                      <span>Pagas: R$ {kpis.despesasPagas.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                      <span>Pend: R$ {kpis.despesasPendentes.toLocaleString('pt-BR', { minimumFractionDigits: 2 })}</span>
+                    </div>
                   </div>
                 ) : (
                   <span className="text-slate-500">DRE por Competência & NF</span>
@@ -937,6 +791,19 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
               </CardTitle>
             </div>
             <div className="flex items-center gap-1 shrink-0">
+              {onNavigateToBrainCeo && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={onNavigateToBrainCeo}
+                  className="h-7 text-[11px] sm:text-xs border-amber-500/40 hover:bg-amber-500/10 text-amber-300 gap-1 px-2"
+                  title="Abrir o Cérebro CEO completo em tela cheia com todas as ferramentas analíticas"
+                >
+                  <Sparkles className="w-3 h-3 text-amber-400" />
+                  <span className="hidden sm:inline">Cérebro Completo</span>
+                  <span className="sm:hidden">Cérebro</span>
+                </Button>
+              )}
               <Button
                 variant="outline"
                 size="sm"
@@ -1007,14 +874,14 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                     <div className="whitespace-pre-line">{msg.content}</div>
 
                     {/* Propostas de Ação Canônicas */}
-                    {msg.actionProposal && (
+                    {((msg.actionProposals && msg.actionProposals.length > 0) || msg.actionProposal) && (
                       <div className="mt-3 pt-3 border-t border-slate-700/60 space-y-2">
                         <div className="text-[11px] font-semibold text-amber-400 flex items-center gap-1.5">
                           <AlertTriangle className="w-3.5 h-3.5" />
                           Ação proposta pelo CEO (Requer Confirmação):
                         </div>
-                        {(() => {
-                          const prop = msg.actionProposal as {
+                        {(msg.actionProposals || [msg.actionProposal]).filter(Boolean).map((rawProp, pIdx) => {
+                          const prop = rawProp as {
                             id: string;
                             actionType?: string;
                             title?: string;
@@ -1024,7 +891,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                           };
                           const proposalStatus = confirmedProposals[prop.id] || prop.status || 'prepared';
                           return (
-                            <div className="bg-slate-950/70 p-2.5 rounded border border-amber-500/30 text-xs space-y-1.5">
+                            <div key={prop.id || pIdx} className="bg-slate-950/70 p-2.5 rounded border border-amber-500/30 text-xs space-y-1.5">
                               <div className="font-semibold text-slate-200">
                                 {prop.title || prop.actionType}
                               </div>
@@ -1076,7 +943,7 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                               </div>
                             </div>
                           );
-                        })()}
+                        })}
                       </div>
                     )}
                   </div>

@@ -37,6 +37,7 @@ import { CeoOpportunitiesTab } from '@/domains/ceo/components/CeoOpportunitiesTa
 import { CeoGoalsTab } from '@/domains/ceo/components/CeoGoalsTab';
 import { ExecutiveReportsTab } from '@/domains/ceo/components/ExecutiveReportsTab';
 import { AgentV2Tab } from '@/domains/ia/components/AgentV2Tab';
+import { ErrorBoundary } from '@/shared/components/ErrorBoundary';
 import { Bot, Target } from 'lucide-react';
 import {
   CeoFinancialMetricsService,
@@ -396,6 +397,8 @@ export const WalletCeoPage: React.FC = () => {
               workspaceId={workspaceId}
               kpis={executiveKpis}
               onNavigateToPlan={() => setActiveMainTab('opportunities')}
+              onSelectTab={(tab) => setActiveMainTab(tab as any)}
+              onNavigateToBrainCeo={() => setActiveMainTab('brain-ceo')}
             />
           </TabsContent>
 
@@ -504,7 +507,9 @@ export const WalletCeoPage: React.FC = () => {
 
           {/* ABA: Metas & Desempenho Empresarial (Gate 4 - Etapa 09) */}
           <TabsContent value="goals" className="space-y-6 focus-visible:outline-none">
-            <CeoGoalsTab workspaceId={workspaceId} kpis={executiveKpis} />
+            <ErrorBoundary context="CeoGoalsTab">
+              <CeoGoalsTab workspaceId={workspaceId} kpis={executiveKpis} />
+            </ErrorBoundary>
           </TabsContent>
 
           {/* ABA: Cérebro CEO Estratégico (Gate 2 - Etapa 03) */}
