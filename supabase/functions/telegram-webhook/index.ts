@@ -4715,8 +4715,393 @@ serve(async (req) => {
       }
     }
 
-    // ─── 0.0. CENTRAL DE FOLGUISTAS E ESCALAS (Gate 6 & Gate 10) ───
+    // ─── 0.0. CENTRAL DE FOLGUISTAS E ESCALAS (Gate 6, Gate 10 & Etapa 3D) ───
     if (isGroup && grupoConfig?.tipo_grupo === "folguistas") {
+      // 0. Previne loops infinitos se a mensagem veio do próprio bot
+      if ((message?.from as Record<string, unknown> | undefined)?.is_bot) {
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      const hasPhoto = Array.isArray(message?.photo) && message.photo.length > 0;
+      const hasDoc = !!message?.document;
+      const captionText = (typeof message?.caption === "string" ? message.caption : "").trim();
+      const promptText = (typeof message?.text === "string" ? message.text : captionText || "").trim();
+      const promptLower = promptText.toLowerCase();
+
+      // Detecta se a mensagem é um envio de Fechamento de Caixa ou Comprovante (Etapa 3D)
+      const fechamentoKeywords = [
+        "fechamento", "envelope", "caixa", "sobra", "sangria", "relatorio",
+        "comprovante", "voucher", "alelo", "sodexo", "ticket", "debito", "credito", "pix"
+      ];
+      const hasFechamentoKeywords = fechamentoKeywords.some((kw) => promptLower.includes(kw));
+      const isFechamentoEnvio = hasPhoto || hasDoc || hasFechamentoKeywords;
+
+      // Se for envio de Fechamento / Fotos / Comprovantes de Turno dos Folguistas (Etapa 3D)
+      if (isFechamentoEnvio) {
+        console.log("[telegram-webhook] [Etapa 3D] Foto/Comprovante de fechamento recebido no grupo Folguistas");
+
+        // 1. Busca colaboradores folguistas no workspace
+        const { data: colabs } = await supabase
+          .from("colaboradores")
+          .select("id, nome, tipo, status, telefone, telegram_user_id, telegram_username")
+          .eq("workspace_id", workspaceId)
+          .neq("status", "inativo");
+
+        const hojeDate = new Date().toISOString().split("T")[0];
+        const { data: escalasHoje } = await supabase
+          .from("colaborador_escalas")
+          .select("id, colaborador_id, data, turno, status")
+          .eq("workspace_id", workspaceId)
+          .eq("data", hojeDate);
+
+        const {
+          resolveColaboradorSeguro,
+          resolveTurnoOperacional,
+          summarizeEyemobileTransactions,
+          compareFechamentoVsEyemobile,
+          buildFolguistaConfirmationMessage,
+          buildOfficialClosingForwardMessage,
+        } = await import("../_shared/ai/folguista-fechamento-engine.ts");
+
+        const senderTgId = (message?.from as Record<string, unknown> | undefined)?.id as number | undefined;
+        const senderTgUsername = (message?.from as Record<string, unknown> | undefined)?.username as string | undefined;
+        const senderFullName = [
+          (message?.from as Record<string, unknown> | undefined)?.first_name,
+          (message?.from as Record<string, unknown> | undefined)?.last_name,
+        ].filter(Boolean).join(" ");
+
+        const idRes = resolveColaboradorSeguro({
+          telegramUserId: senderTgId,
+          telegramUsername: senderTgUsername,
+          senderFullName,
+          colaboradores: (colabs || []) as any,
+          escalasHoje: (escalasHoje || []) as any,
+        });
+
+        const colab = idRes.colaborador;
+        const colabId = colab?.id || null;
+        const colabNome = colab?.nome || senderFullName || "Folguista";
+        const escala = idRes.escala;
+
+        // Se identificado por nome + escala, persiste o telegram_user_id imutável no banco para blindar futuras requisições
+        if (idRes.modo === "nome_e_escala" && colabId && senderTgId) {
+          await supabase
+            .from("colaboradores")
+            .update({
+              telegram_user_id: senderTgId,
+              telegram_username: senderTgUsername || null,
+            })
+            .eq("id", colabId);
+        }
+
+        const turno = resolveTurnoOperacional({
+          escala,
+          captionOuTexto: promptText,
+        });
+
+        let storagePath: string | null = null;
+        let fileId: string | null = null;
+        let finalImageBase64Uri = "";
+
+        if (hasPhoto || hasDoc) {
+          fileId = hasPhoto
+            ? (message.photo as Array<{ file_id: string }>)[(message.photo as Array<{ file_id: string }>).length - 1].file_id
+            : (message.document as { file_id: string }).file_id;
+
+          if (telegramBotToken && fileId) {
+            const getFileResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/getFile?file_id=${fileId}`);
+            const fileInfo = await getFileResp.json();
+
+            if (fileInfo?.ok && fileInfo?.result?.file_path) {
+              const filePath = fileInfo.result.file_path;
+              const ext = filePath.split(".").pop()?.toLowerCase() || "jpg";
+              const downloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
+              if (downloadResp.ok) {
+                const fileBytes = new Uint8Array(await downloadResp.arrayBuffer());
+                const fileName = `fechamento_${hojeDate}_${Date.now()}_${fileId}.${ext}`;
+                storagePath = `groups/${workspaceId}/${grupoConfig.id}/${fileName}`;
+
+                // Upload para bucket privado chat-attachments
+                await supabase.storage.from("chat-attachments").upload(storagePath, fileBytes, {
+                  contentType: `image/${ext === "jpg" ? "jpeg" : ext}`,
+                  upsert: true,
+                });
+
+                const b64 = base64Encode(fileBytes);
+                finalImageBase64Uri = `data:image/jpeg;base64,${b64}`;
+              }
+            }
+          }
+        }
+
+        let valoresExtraidos = {
+          dinheiro: 0,
+          debito: 0,
+          credito: 0,
+          pix: 0,
+          voucher: 0,
+        };
+        let sobraInformada = 0;
+
+        const matchSobra = promptText.match(/sobra[:\s]*R?\$?\s*([\d.,]+)/i);
+        if (matchSobra) {
+          const sobraStr = matchSobra[1].replace(/\./g, "").replace(",", ".");
+          sobraInformada = parseFloat(sobraStr) || 0;
+        }
+
+        if (finalImageBase64Uri) {
+          const promptConferencia = `Você é um conferente especialista de fechamento de caixa e envelopes da Rodo Point.
+Analise esta imagem (envelope de fechamento, relatório de caixa, comprovante de maquininha ou resumo) e extraia os valores por forma de pagamento:
+- Dinheiro
+- Cartão Débito
+- Cartão Crédito
+- Pix
+- Voucher (somente se indicar VA, VR, Alimentação, Refeição, Alelo, Sodexo, Ticket)
+- Sobra (se houver valor anotado como sobra)
+
+Responda ESTRITAMENTE em formato JSON (sem markdown):
+{
+  "tipo": "fechamento",
+  "data": "DD/MM/AAAA",
+  "total": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "sobra": 0
+}`;
+
+          try {
+            const aiResp = await fetch(`${supabaseUrl}/functions/v1/openai-proxy`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${supabaseServiceKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                model: "gpt-4o",
+                user_id: userId,
+                temperature: 0.0,
+                messages: [
+                  { role: "system", content: promptConferencia },
+                  {
+                    role: "user",
+                    content: [
+                      { type: "text", text: `Extraia os valores deste fechamento do turno ${turno}.` },
+                      { type: "image_url", image_url: { url: finalImageBase64Uri, detail: "high" } },
+                    ],
+                  },
+                ],
+              }),
+            });
+
+            if (aiResp.ok) {
+              const aiJson = await aiResp.json();
+              const rawContent = aiJson.choices?.[0]?.message?.content || "";
+              const jsonMatch = rawContent.match(/\{[\s\S]*\}/);
+              if (jsonMatch) {
+                const parsed = JSON.parse(jsonMatch[0]);
+                const tot = parsed.total || {};
+                valoresExtraidos.dinheiro = Number(tot.dinheiro) || 0;
+                valoresExtraidos.debito = Number(tot.debito) || 0;
+                valoresExtraidos.credito = Number(tot.credito) || 0;
+                valoresExtraidos.pix = Number(tot.pix) || 0;
+                valoresExtraidos.voucher = Number(tot.voucher) || 0;
+                if (Number(parsed.sobra) > 0 && sobraInformada === 0) {
+                  sobraInformada = Number(parsed.sobra);
+                }
+              }
+            }
+          } catch (aiErr) {
+            console.warn("[telegram-webhook] Erro ao analisar imagem de fechamento via IA:", aiErr);
+          }
+        }
+
+        // Consultar vendas Eyemobile deduplicadas (Gate 8)
+        let qVendas = supabase
+          .from("transacoes")
+          .select("id, valor, metodo_pagamento, tipo, status, descricao, observacoes, origem, deduplication_key")
+          .eq("tipo", "receita")
+          .eq("data", hojeDate);
+
+        if (workspaceId) qVendas = qVendas.eq("workspace_id", workspaceId);
+        else qVendas = qVendas.eq("user_id", userId);
+
+        const { data: txsHoje } = await qVendas;
+        const eyemobileSummary = summarizeEyemobileTransactions(txsHoje || []);
+        const diferencas = compareFechamentoVsEyemobile(valoresExtraidos as any, eyemobileSummary);
+
+        const colabKey = colabId || `pendente_${senderTgId || "anon"}`;
+        const chaveOperacional = `${workspaceId}_${hojeDate}_${colabKey}_${turno}`;
+
+        const { data: fechExistente } = await supabase
+          .from("fechamentos_caixa")
+          .select("*")
+          .eq("workspace_id", workspaceId)
+          .eq("chave_operacional", chaveOperacional)
+          .maybeSingle();
+
+        const novoAnexoItem = {
+          id: crypto.randomUUID(),
+          file_id: fileId || "",
+          storage_path: storagePath || "",
+          mime_type: hasPhoto ? "image/jpeg" : "application/octet-stream",
+          tipo_documento: "envelope",
+          caption: promptText,
+          created_at: new Date().toISOString(),
+          valor_extraido: valoresExtraidos,
+        };
+
+        // Busca grupo oficial de fechamento canônico (Gate 2)
+        const { data: canonicalFechamentoGrupo } = await supabase
+          .from("telegram_grupos_config")
+          .select("*")
+          .eq("workspace_id", workspaceId)
+          .eq("tipo_grupo", "fechamento")
+          .eq("ativo", true)
+          .maybeSingle();
+
+        const grupoOficialId = canonicalFechamentoGrupo?.id || grupoConfig.id;
+        const grupoOficialChatId = canonicalFechamentoGrupo?.chat_id || chatId;
+
+        let fechamentoFinalId = "";
+        let anexosFinais: any[] = [];
+
+        if (fechExistente) {
+          fechamentoFinalId = fechExistente.id;
+          anexosFinais = Array.isArray(fechExistente.anexos) ? [...fechExistente.anexos] : [];
+          if (storagePath) anexosFinais.push(novoAnexoItem);
+
+          const currentMsgs = Array.isArray(fechExistente.telegram_message_ids) ? fechExistente.telegram_message_ids : [];
+          if (message.message_id && !currentMsgs.includes(message.message_id)) {
+            currentMsgs.push(message.message_id);
+          }
+
+          const prevTot = (fechExistente.total || {}) as Record<string, number>;
+          const mergedTot = {
+            dinheiro: Math.max(Number(prevTot.dinheiro) || 0, valoresExtraidos.dinheiro),
+            debito: Math.max(Number(prevTot.debito) || 0, valoresExtraidos.debito),
+            credito: Math.max(Number(prevTot.credito) || 0, valoresExtraidos.credito),
+            pix: Math.max(Number(prevTot.pix) || 0, valoresExtraidos.pix),
+            voucher: (Number(prevTot.voucher) || 0) + (valoresExtraidos.voucher > 0 && valoresExtraidos.voucher !== Number(prevTot.voucher) ? valoresExtraidos.voucher : 0),
+          };
+
+          const mergedDiffs = compareFechamentoVsEyemobile(mergedTot as any, eyemobileSummary);
+
+          await supabase
+            .from("fechamentos_caixa")
+            .update({
+              anexos: anexosFinais,
+              telegram_message_ids: currentMsgs,
+              total: mergedTot,
+              envelope_total: mergedTot,
+              eyemobile_total: eyemobileSummary,
+              divergencias: mergedDiffs,
+              sobra: sobraInformada > 0 ? sobraInformada : fechExistente.sobra,
+              status: mergedDiffs.length > 0 ? "divergencia" : "pendente_conferencia",
+              updated_at: new Date().toISOString(),
+            })
+            .eq("id", fechExistente.id);
+        } else {
+          anexosFinais = storagePath ? [novoAnexoItem] : [];
+          const { data: newFech } = await supabase
+            .from("fechamentos_caixa")
+            .insert({
+              workspace_id: workspaceId,
+              user_id: userId,
+              chat_id: grupoOficialChatId,
+              grupo_id: grupoOficialId,
+              origem_grupo_id: grupoConfig.id,
+              origem_canal: "telegram",
+              colaborador_id: colabId,
+              escala_id: escala?.id || null,
+              turno: turno,
+              chave_operacional: chaveOperacional,
+              data_fechamento: hojeDate.split("-").reverse().join("/"),
+              total: valoresExtraidos,
+              envelope_total: valoresExtraidos,
+              eyemobile_total: eyemobileSummary,
+              sobra: sobraInformada > 0 ? sobraInformada : null,
+              divergencias: diferencas,
+              status: diferencas.length > 0 ? "divergencia" : "pendente_conferencia",
+              anexos: anexosFinais,
+              anexo_path: storagePath || null,
+              telegram_message_ids: [message.message_id],
+            })
+            .select("id")
+            .single();
+
+          fechamentoFinalId = newFech?.id || "";
+        }
+
+        // Encaminhamento ao grupo oficial (Gate 9)
+        const msgOficial = buildOfficialClosingForwardMessage({
+          colaboradorNome: colabNome,
+          dataFechamento: hojeDate.split("-").reverse().join("/"),
+          turno,
+          envelope: valoresExtraidos as any,
+          eyemobile: eyemobileSummary,
+          diferencas,
+          status: diferencas.length > 0 ? "divergencia" : "pendente_conferencia",
+          sobra: sobraInformada,
+          totalFotos: anexosFinais.length,
+          fechamentoId: fechamentoFinalId,
+        });
+
+        if (grupoOficialChatId && telegramBotToken) {
+          if (hasPhoto && fileId) {
+            const sendPhotoResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: grupoOficialChatId,
+                photo: fileId,
+                caption: msgOficial,
+                parse_mode: "HTML",
+              }),
+            });
+            const photoSent = await sendPhotoResp.json();
+            if (photoSent?.ok && fechamentoFinalId) {
+              await supabase
+                .from("fechamentos_caixa")
+                .update({
+                  espelhado_em: new Date().toISOString(),
+                  espelhado_message_id: photoSent.result?.message_id,
+                })
+                .eq("id", fechamentoFinalId);
+            }
+          } else {
+            const sendMsgResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({
+                chat_id: grupoOficialChatId,
+                text: msgOficial,
+                parse_mode: "HTML",
+              }),
+            });
+            const msgSent = await sendMsgResp.json();
+            if (msgSent?.ok && fechamentoFinalId) {
+              await supabase
+                .from("fechamentos_caixa")
+                .update({
+                  espelhado_em: new Date().toISOString(),
+                  espelhado_message_id: msgSent.result?.message_id,
+                })
+                .eq("id", fechamentoFinalId);
+            }
+          }
+        }
+
+        // Resposta segura no grupo Folguistas (Gate 9, Sigilo Financeiro)
+        const msgFolguista = buildFolguistaConfirmationMessage({
+          nomeColaborador: colabNome,
+          dataFechamento: hojeDate.split("-").reverse().join("/"),
+          turno,
+          totalFotos: anexosFinais.length,
+        });
+
+        await sendReply(msgFolguista);
+        return new Response("OK", { status: 200, headers: corsHeaders });
+      }
+
+      // Se não for fechamento, segue para o fluxo normal de Escalas / Disponibilidade (Etapa 3C)
       const isGreeting = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "/start", "/ajuda", "escalas", "escala"].includes(respLower);
       if (isGreeting) {
         await sendReply(

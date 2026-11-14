@@ -34,6 +34,7 @@ interface ConversaDetailPanelProps {
   isExecutiveUser: boolean;
   onOpenManageModal: (grupoId?: string) => void;
   onOpenAttachmentUrl: (storagePath: string) => Promise<void>;
+  onAprovarFechamento?: (fechamentoId: string) => Promise<void>;
 }
 
 function formatMoney(v: unknown): string {
@@ -62,6 +63,7 @@ export const ConversaDetailPanel: React.FC<ConversaDetailPanelProps> = ({
   isExecutiveUser,
   onOpenManageModal,
   onOpenAttachmentUrl,
+  onAprovarFechamento,
 }) => {
   if (!thread) {
     return (
@@ -210,8 +212,8 @@ export const ConversaDetailPanel: React.FC<ConversaDetailPanelProps> = ({
             </div>
           )}
 
-          {/* Fechamentos de caixa (apenas grupo fechamento) */}
-          {thread.grupo?.tipo_grupo === "fechamento" && (
+          {/* Fechamentos de caixa (grupo fechamento ou folguistas) */}
+          {(thread.grupo?.tipo_grupo === "fechamento" || thread.grupo?.tipo_grupo === "folguistas") && (
             <div className="space-y-2">
               <h4 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex items-center gap-1.5">
                 <Receipt className="w-3.5 h-3.5" />
@@ -230,7 +232,7 @@ export const ConversaDetailPanel: React.FC<ConversaDetailPanelProps> = ({
                     return (
                       <div
                         key={f.id}
-                        className="rounded-lg border border-border/50 bg-background/40 p-2.5 space-y-1 text-xs"
+                        className="rounded-lg border border-border/50 bg-background/40 p-2.5 space-y-1.5 text-xs"
                       >
                         <div className="flex items-center justify-between gap-2">
                           <span className="font-semibold text-foreground">
@@ -242,7 +244,7 @@ export const ConversaDetailPanel: React.FC<ConversaDetailPanelProps> = ({
                               "text-[10px]",
                               f.status === "conferido"
                                 ? "border-emerald-500/40 text-emerald-300 bg-emerald-500/10"
-                                : f.status === "divergente"
+                                : f.status === "divergencia" || f.status === "divergente"
                                   ? "border-red-500/40 text-red-300 bg-red-500/10"
                                   : "border-amber-500/40 text-amber-300 bg-amber-500/10",
                             )}
@@ -250,22 +252,50 @@ export const ConversaDetailPanel: React.FC<ConversaDetailPanelProps> = ({
                             {f.status || "pendente"}
                           </Badge>
                         </div>
+
+                        {f.colaborador?.nome && (
+                          <div className="text-[11px] text-primary font-medium flex items-center gap-1">
+                            <span>👤</span>
+                            <span>{f.colaborador.nome}</span>
+                            {f.turno && (
+                              <span className="text-[10px] text-muted-foreground bg-muted/40 px-1 py-0.5 rounded uppercase">
+                                {f.turno}
+                              </span>
+                            )}
+                          </div>
+                        )}
+
                         <div className="grid grid-cols-2 gap-1 text-[11px] text-muted-foreground">
                           <span>Envelope: {formatMoney(envTotal)}</span>
                           <span>PDV: {formatMoney(eyeTotal)}</span>
                         </div>
-                        <div className="text-[11px] font-medium">
-                          Diferença:{" "}
-                          <span
-                            className={
-                              Number(f.sobra || 0) === 0
-                                ? "text-emerald-300"
-                                : "text-amber-300"
-                            }
-                          >
-                            {formatMoney(f.sobra)}
-                          </span>
-                        </div>
+
+                        {Number(f.sobra || 0) > 0 && (
+                          <div className="text-[11px] font-medium text-amber-300">
+                            Sobra informada: {formatMoney(f.sobra)}
+                          </div>
+                        )}
+
+                        {f.anexos && f.anexos.length > 0 && (
+                          <div className="text-[10px] text-muted-foreground flex items-center gap-1">
+                            <span>📸</span>
+                            <span>{f.anexos.length} documento(s)/foto(s) anexado(s)</span>
+                          </div>
+                        )}
+
+                        {isExecutiveUser && f.status !== "conferido" && onAprovarFechamento && (
+                          <div className="pt-1">
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              className="w-full h-7 text-[11px] text-emerald-400 border-emerald-500/30 hover:bg-emerald-500/10"
+                              onClick={() => onAprovarFechamento(f.id)}
+                            >
+                              <CheckCircle2 className="w-3 h-3 mr-1" />
+                              Aprovar Fechamento
+                            </Button>
+                          </div>
+                        )}
                       </div>
                     );
                   })}
