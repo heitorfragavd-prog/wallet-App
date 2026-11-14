@@ -28,7 +28,7 @@ import {
   YAxis,
   Tooltip,
 } from 'recharts';
-import { useWalletAgentChat, type ChatMessage } from '@/domains/ia/hooks/useWalletAgentChat';
+import { useWalletAgentChat } from '@/domains/ia/hooks/useWalletAgentChat';
 import { WalletAiOrchestratorClient } from '@/domains/ia/services/WalletAiOrchestratorClient';
 import { CeoExecutiveKpis } from '@/domains/ceo/services/CeoFinancialMetricsService';
 import { CeoIntelligenceEngine } from '@/domains/ceo/services/CeoIntelligenceEngine';
@@ -37,11 +37,21 @@ import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/shared/hooks/use-toast';
 import { useAuth } from '@/domains/auth/hooks/useAuth';
 
+export type CeoMainTab =
+  | 'overview'
+  | 'analyses'
+  | 'opportunities'
+  | 'experiments'
+  | 'goals'
+  | 'brain-ceo'
+  | 'reports'
+  | 'departments';
+
 export interface CeoOverviewTabProps {
   workspaceId: string;
   kpis: CeoExecutiveKpis;
   onNavigateToPlan?: () => void;
-  onSelectTab?: (tab: string) => void;
+  onSelectTab?: (tab: CeoMainTab) => void;
   onNavigateToBrainCeo?: () => void;
 }
 
@@ -955,6 +965,17 @@ export const CeoOverviewTab: React.FC<CeoOverviewTabProps> = ({
                   )}
                 </div>
               ))
+            )}
+            {isLoading && (
+              <div className="flex gap-2.5 justify-start">
+                <div className="w-6 h-6 rounded-full bg-amber-500/20 text-amber-400 flex items-center justify-center shrink-0 text-xs">
+                  👑
+                </div>
+                <div className="bg-slate-900 border border-border/50 text-slate-400 rounded-lg p-3 text-xs flex items-center gap-2">
+                  <Clock className="w-3.5 h-3.5 animate-spin text-amber-400" />
+                  <span>{currentStatus || 'Analisando dados do negócio...'}</span>
+                </div>
+              </div>
             )}
             <div ref={messagesEndRef} />
           </CardContent>

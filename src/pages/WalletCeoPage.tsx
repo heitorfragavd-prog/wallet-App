@@ -29,7 +29,7 @@ import {
   ProductSalesCMVRecord,
 } from '@/domains/ceo/types';
 import { GrowthExperimentCard } from '@/domains/ceo/components/GrowthExperimentCard';
-import { CeoOverviewTab } from '@/domains/ceo/components/CeoOverviewTab';
+import { CeoOverviewTab, type CeoMainTab } from '@/domains/ceo/components/CeoOverviewTab';
 import { CeoCommercialAnalysisTab } from '@/domains/ceo/components/CeoCommercialAnalysisTab';
 import { CeoExpenseAnalysisTab } from '@/domains/ceo/components/CeoExpenseAnalysisTab';
 import { CeoNetProfitAnalysisTab } from '@/domains/ceo/components/CeoNetProfitAnalysisTab';
@@ -397,7 +397,7 @@ export const WalletCeoPage: React.FC = () => {
               workspaceId={workspaceId}
               kpis={executiveKpis}
               onNavigateToPlan={() => setActiveMainTab('opportunities')}
-              onSelectTab={(tab) => setActiveMainTab(tab as any)}
+              onSelectTab={(tab: CeoMainTab) => setActiveMainTab(tab)}
               onNavigateToBrainCeo={() => setActiveMainTab('brain-ceo')}
             />
           </TabsContent>
