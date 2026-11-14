@@ -14,6 +14,8 @@ import {
   ShieldAlert,
   Sparkles,
   Users,
+  Volume2,
+  Square,
   X,
 } from "lucide-react";
 import { Button } from "@/shared/components/ui/button";
@@ -34,6 +36,7 @@ import {
 } from "../types";
 import type { SendMessageOptions } from "../hooks/useCentralConversas";
 import { AudioRecorderButton } from "./AudioRecorderButton";
+import { useTextToSpeech } from "../hooks/useTextToSpeech";
 import { cn } from "@/lib/utils";
 
 interface ConversaThreadViewProps {
@@ -100,6 +103,13 @@ export const ConversaThreadView: React.FC<ConversaThreadViewProps> = ({
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const messagesEndRef = useRef<HTMLDivElement | null>(null);
+
+  const {
+    isSupported: isTtsSupported,
+    isSpeaking: isTtsSpeaking,
+    currentMessageId: speakingMessageId,
+    toggle: toggleTts,
+  } = useTextToSpeech();
 
   // Em Conversas da Loja, o usuário pode optar por aviso direto ou consulta à IA sem dados confidenciais
   useEffect(() => {
@@ -503,6 +513,34 @@ export const ConversaThreadView: React.FC<ConversaThreadViewProps> = ({
                   )}
 
                   {msg.content && <div>{msg.content}</div>}
+
+                  {isAssistant && isTtsSupported && msg.content && (
+                    <div className="mt-2 flex items-center gap-1.5 pt-1.5 border-t border-border/30">
+                      <button
+                        type="button"
+                        onClick={() => toggleTts(msg.id, msg.content)}
+                        className={cn(
+                          "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+                          speakingMessageId === msg.id && isTtsSpeaking
+                            ? "bg-amber-500/20 text-amber-300 border border-amber-500/40 animate-pulse"
+                            : "text-muted-foreground hover:text-foreground hover:bg-muted/40"
+                        )}
+                        title={speakingMessageId === msg.id && isTtsSpeaking ? "Parar leitura em voz alta" : "Ouvir resposta (TTS)"}
+                      >
+                        {speakingMessageId === msg.id && isTtsSpeaking ? (
+                          <>
+                            <Square className="w-3 h-3 fill-current" />
+                            <span>Parar</span>
+                          </>
+                        ) : (
+                          <>
+                            <Volume2 className="w-3 h-3" />
+                            <span>Ouvir</span>
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  )}
                 </div>
               </div>
             );

@@ -15,7 +15,40 @@ export interface TranscribeAudioResult {
   error?: string;
 }
 
+export interface AudioCostEstimate {
+  durationSeconds: number;
+  costUsd: number;
+  costBrl: number;
+  ratePerMinuteUsd: number;
+}
+
 export class WalletAudioService {
+  /**
+   * Custo oficial da OpenAI para o modelo Whisper: US$ 0.006 por minuto
+   */
+  public static readonly WHISPER_USD_PER_MINUTE = 0.006;
+  public static readonly DEFAULT_USD_TO_BRL = 5.80;
+
+  /**
+   * Calcula a estimativa de custo de transcrição Whisper com base na duração do áudio
+   */
+  public static calculateCostEstimate(
+    durationSeconds: number,
+    usdBrlRate = WalletAudioService.DEFAULT_USD_TO_BRL
+  ): AudioCostEstimate {
+    const safeDuration = Math.max(0, durationSeconds);
+    const minutes = safeDuration / 60;
+    const costUsd = minutes * WalletAudioService.WHISPER_USD_PER_MINUTE;
+    const costBrl = costUsd * usdBrlRate;
+
+    return {
+      durationSeconds: safeDuration,
+      costUsd: Number(costUsd.toFixed(6)),
+      costBrl: Number(costBrl.toFixed(4)),
+      ratePerMinuteUsd: WalletAudioService.WHISPER_USD_PER_MINUTE,
+    };
+  }
+
   /**
    * Envia um Blob de áudio gravado para transcrição no Whisper via Edge Function openai-proxy
    */
