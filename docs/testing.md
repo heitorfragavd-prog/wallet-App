@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 272.
+- Arquivos de teste: 347.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -172,6 +172,8 @@
 | src\domains\auth\hooks\useProfile.test.ts |
 | src\domains\ceo\growth-engine.test.ts |
 | src\domains\ceo\utils\ceoDateRanges.test.ts |
+| src\domains\conversas\central-conversas-etapa2.test.ts |
+| src\domains\conversas\central-conversas-governance.test.ts |
 | src\domains\delivery\connectors.test.ts |
 | src\domains\delivery\DeliveryRoleGuard.test.tsx |
 | src\domains\delivery\pricing-simulator.test.ts |
@@ -181,6 +183,7 @@
 | src\domains\finance\hooks\useComparativoDiario.test.ts |
 | src\domains\finance\hooks\useConciliacao.test.ts |
 | src\domains\finance\hooks\useDespesas.test.ts |
+| src\domains\finance\hooks\useDividas.test.ts |
 | src\domains\finance\hooks\useDRE.test.ts |
 | src\domains\finance\hooks\useEquipeAcertos.test.tsx |
 | src\domains\finance\hooks\useEyemobileDashboard.test.ts |
@@ -192,6 +195,7 @@
 | src\domains\finance\utils\dateHelpers.test.ts |
 | src\domains\finance\__tests__\eyemobile-price-safety.test.ts |
 | src\domains\finance\__tests__\eyemobile-sync-product-identity.test.ts |
+| src\domains\finance\__tests__\eyemobileDeduplicationSuite.test.ts |
 | src\domains\finance\__tests__\eyemobileSyncSecurity.test.ts |
 | src\domains\finance\__tests__\faturaCartaoIsolation.test.ts |
 | src\domains\finance\__tests__\importadorFaturaSeguro.test.ts |
@@ -262,6 +266,7 @@
 | src\domains\ia\hooks\useWalletIA.test.ts |
 | src\domains\ia\utils\dateWindow.test.ts |
 | src\domains\ia\utils\imageOptimizer.test.ts |
+| src\domains\notifications\hooks\useNotificacoesPush.test.ts |
 | src\domains\vehicles\hooks\useManutencoesCustomizadas.test.ts |
 | src\domains\vehicles\hooks\usePlanosManutencao.test.ts |
 | src\shared\utils\spreadsheetExport.test.ts |
@@ -269,15 +274,85 @@
 | src\test\empty.ts |
 | src\test\setup.ts |
 | supabase\functions\processar-lembretes-manutencao\index.test.ts |
+| tests\agenda\etapa12_gate1_gate2_calendar_auth.test.ts |
+| tests\agenda\etapa12_gate4_gate5_gate6_ai_voice_telegram.test.ts |
+| tests\agenda\etapa12_gate7_gate8_relatorio10h_lembretes.test.ts |
+| tests\agenda\etapa12_gate9_gate10_homologacao_final.test.ts |
+| tests\ai-brains\dois_cerebros_governance.test.ts |
+| tests\ai-brains\dois_cerebros_hardening_gates.test.ts |
+| tests\ai-brains\etapa04_historico_unificado.test.ts |
 | tests\application-phase-abc-sequence.spec.ts |
 | tests\audit\git_governance.test.ts |
 | tests\audit\production_readiness.test.ts |
 | tests\audit\quality_audit.test.ts |
 | tests\audit\security_audit.test.ts |
+| tests\ceo\cron_relatorio_executivo.test.ts |
+| tests\ceo\entrega_d_gate0_hardening.test.ts |
+| tests\ceo\etapa8_banco_e_autorizacao_executiva.test.ts |
+| tests\ceo\etapa8_baseline_medicao_automatica.test.ts |
+| tests\ceo\etapa8_experimentos_lifecycle.test.tsx |
+| tests\ceo\etapa8_gate1_homologacao_medicao_kpi.test.ts |
+| tests\ceo\etapa8_gate2_hardening_banco.test.ts |
+| tests\ceo\etapa8_homologacao_final_stage08.test.ts |
+| tests\ceo\etapa8_intelligence_engine_evaluation.test.ts |
+| tests\ceo\etapa9_gate0_gate1_gate2_contracts.test.ts |
+| tests\ceo\etapa9_gate3_motor_calculos.test.ts |
+| tests\ceo\etapa9_gate4_interface_metas.test.tsx |
+| tests\ceo\etapa9_gate5_gate6_especialistas_e_alertas.test.ts |
+| tests\ceo\etapa9_hardening_gates0_a_6.test.ts |
+| tests\ceo\etapa9_homologacao_final_stage09.test.ts |
+| tests\ceo\executive_report_collector.test.ts |
+| tests\ceo\executive_report_foundation.test.ts |
+| tests\ceo\executive_report_homologation.test.ts |
+| tests\ceo\executive_report_synthesizer.test.ts |
+| tests\ceo\financial_consistency_and_ai.test.ts |
+| tests\ceo\gate0_remocao_valores_fixos_financeiros.test.ts |
+| tests\ceo\manual_report_authorization.test.ts |
+| tests\ceo\report_idempotency_multichannel.test.ts |
+| tests\ceo\specialists_7_homologacao_final.test.ts |
+| tests\ceo\specialists_architecture_and_financial.test.ts |
+| tests\ceo\specialists_estoque_compras.test.ts |
+| tests\ceo\specialists_fiscal_vendas_and_hardening.test.ts |
+| tests\ceo\specialists_integrados_homologacao.test.ts |
+| tests\ceo\specialists_inteligencia_competitiva.test.ts |
+| tests\ceo\specialists_operacoes.test.ts |
+| tests\ceo\specialists_pessoal_rh.test.ts |
+| tests\ceo\ui_executive_reports_tab.test.tsx |
+| tests\ceo\wallet_ceo_v3_evolucao.test.ts |
+| tests\conversas\etapa10_audio_recording.test.ts |
+| tests\conversas\etapa10_tts_and_costs.test.ts |
+| tests\conversas\etapa13_gate1_gate2_gate3_whatsapp_architecture.test.ts |
+| tests\conversas\etapa13_gate4_gate5_gate6_gate7_whatsapp_ai.test.ts |
+| tests\conversas\etapa13_gate8_gate9_whatsapp_ui_telemetry.test.tsx |
+| tests\conversas\etapa3d1_integridade_fechamentos.test.ts |
+| tests\conversas\etapa3d_fechamentos_integrados_folguistas.test.ts |
+| tests\conversas\etapa3e_automacoes_e_escalas.test.ts |
+| tests\conversas\etapa3e_concorrencia_anexos.test.ts |
+| tests\conversas\etapa3e_homologacao_ponta_a_ponta.test.ts |
+| tests\conversas\etapa3e_turnos_e_identidade.test.ts |
+| tests\conversas\etapa3_folguistas_estrutura_e_seguranca.test.ts |
+| tests\escalas\escala_engine_e_regras.test.ts |
+| tests\escalas\etapa3c1_gates_2_ao_9_integracao_completa.test.ts |
+| tests\escalas\etapa3c1_simulacao_e_status_seguro.test.ts |
+| tests\escalas\etapa3c_automacoes_semanais.test.ts |
+| tests\escalas\folguistaResponseParser.test.ts |
+| tests\eyemobile\eyemobile_dashboard_regression.test.ts |
+| tests\eyemobile\eyemobile_sequence_guard.test.ts |
+| tests\gmail\etapa11_gate10_homologacao_final.test.ts |
+| tests\gmail\etapa11_gate2_gate3_auth_and_sync.test.ts |
+| tests\gmail\etapa11_gate4_gate5_gate6_nfe_dedup.test.ts |
+| tests\gmail\etapa11_gate7_gate8_gate9_dashboard_alertas.test.ts |
+| tests\notifications\cron_automation_dispatcher.test.ts |
+| tests\notifications\hardening_gate0_security.test.ts |
+| tests\notifications\notification_dispatcher.test.ts |
+| tests\notifications\ui_preferences_team_rbac.test.tsx |
+| tests\notifications\user_notification_preferences_rbac.test.ts |
 | tests\reconciliation\git_reconciliation.test.ts |
 | tests\release\production_release.test.ts |
+| tests\security-fixes\backup_exclusion_security.test.ts |
 | tests\security-fixes\dockerignore_security.test.ts |
 | tests\security-fixes\openai_proxy_security.test.ts |
+| tests\security-fixes\simulacao_notificacoes_seguranca.test.ts |
 | tests\security-fixes\test_webhook_security.test.ts |
 | tests\security-fixes\validar_senha_security.test.ts |
 | tests\security-homologation.spec.ts |

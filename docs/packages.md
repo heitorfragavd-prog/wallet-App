@@ -751,7 +751,29 @@
 | Terceiro | transitiva | zoid | 9.0.63 | Cross domain components. | git://github.com/krakenjs/zoid | git://github.com/krakenjs/zoid |
 | Terceiro | transitiva | @babel/code-frame | 7.29.0 | Generate errors that contain a code frame that point to source locations. | https://github.com/babel/babel | https://github.com/babel/babel |
 | Terceiro | transitiva | @babel/helper-validator-identifier | 7.28.5 | Validate identifier/keywords name | https://github.com/babel/babel | https://github.com/babel/babel |
+| Terceiro | transitiva | @oxc-project/types | 0.156.0 | Types for Oxc AST nodes | https://github.com/oxc-project/oxc | https://github.com/oxc-project/oxc |
+| Terceiro | transitiva | @rolldown/binding-android-arm-eabi | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-android-arm64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-darwin-arm64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-darwin-x64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-freebsd-x64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-arm-gnueabihf | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-arm64-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-arm64-musl | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-ppc64-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-s390x-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-x64-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-linux-x64-musl | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-openharmony-arm64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-win32-arm64-msvc | 1.2.16 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | @rolldown/binding-win32-x64-msvc | 1.2.16 | Fast JavaScript/TypeScript bundler in Rust with Rollup-compatible API. | https://github.com/rolldown/rolldown | https://github.com/rolldown/rolldown |
 | Terceiro | transitiva | @types/pg | 8.23.1 | TypeScript definitions for pg | https://github.com/DefinitelyTyped/DefinitelyTyped | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| Terceiro | transitiva | @vitest/expect | 4.1.11 | Jest's expect matchers as a Chai plugin | https://github.com/vitest-dev/vitest | https://github.com/vitest-dev/vitest |
+| Terceiro | transitiva | @vitest/runner | 4.1.11 | Vitest test runner | https://github.com/vitest-dev/vitest | https://github.com/vitest-dev/vitest |
+| Terceiro | transitiva | @vitest/snapshot | 4.1.11 | Vitest snapshot manager | https://github.com/vitest-dev/vitest | https://github.com/vitest-dev/vitest |
+| Terceiro | transitiva | @vitest/spy | 4.1.11 | Lightweight Jest compatible spy implementation | https://github.com/vitest-dev/vitest | https://github.com/vitest-dev/vitest |
+| Terceiro | transitiva | chai | 6.3.0 | BDD/TDD assertion library for node.js and the browser. Test framework agnostic. | https://github.com/chaijs/chai | https://github.com/chaijs/chai |
+| Terceiro | transitiva | nanoid | 3.3.20 | A tiny (116 bytes), secure URL-friendly unique string ID generator | ai/nanoid | — |
 | Terceiro | transitiva | pg | 8.23.0 | PostgreSQL client - pure javascript & libpq with the same API | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-cloudflare | 1.4.0 | A socket implementation that can run on Cloudflare Workers using native TCP connections. | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-connection-string | 2.14.0 | Functions for dealing with a PostgreSQL connection string | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
@@ -760,10 +782,17 @@
 | Terceiro | transitiva | pg-protocol | 1.16.0 | The postgres client/server binary protocol, implemented in TypeScript | git://github.com/brianc/node-postgres | git://github.com/brianc/node-postgres |
 | Terceiro | transitiva | pg-types | 2.2.0 | Query result type converters for node-postgres | git://github.com/brianc/node-pg-types | git://github.com/brianc/node-pg-types |
 | Terceiro | transitiva | pgpass | 1.0.5 | Module for reading .pgpass | https://github.com/hoegaarden/pgpass | https://github.com/hoegaarden/pgpass |
+| Terceiro | transitiva | postcss | 8.5.32 | Tool for transforming styles with JS plugins | postcss/postcss | — |
 | Terceiro | transitiva | postgres-array | 2.0.0 | Parse postgres array columns | bendrucker/postgres-array | — |
 | Terceiro | transitiva | postgres-bytea | 1.0.1 | Postgres bytea parser | bendrucker/postgres-bytea | — |
 | Terceiro | transitiva | postgres-date | 1.0.7 | Postgres date column parser | bendrucker/postgres-date | — |
 | Terceiro | transitiva | postgres-interval | 1.2.0 | Parse Postgres interval columns | bendrucker/postgres-interval | — |
+| Terceiro | transitiva | rolldown | 1.2.16 | Fast JavaScript/TypeScript bundler in Rust with Rollup-compatible API. | https://github.com/rolldown/rolldown | https://github.com/rolldown/rolldown |
+| Terceiro | transitiva | source-map-js | 1.2.2 | Generates and consumes source maps | 7rulnik/source-map-js | — |
 | Terceiro | transitiva | split2 | 4.2.0 | split a Text Stream into a Line Stream, using Stream 3 | https://github.com/mcollina/split2 | https://github.com/mcollina/split2 |
+| Terceiro | transitiva | vitest | 4.1.11 | Next generation testing framework powered by Vite | https://github.com/vitest-dev/vitest | https://github.com/vitest-dev/vitest |
+| Terceiro | transitiva | @vitest/mocker | 4.1.11 | Finalidade não descrita nos metadados locais. |  | — |
+| Terceiro | transitiva | picomatch | 4.0.7 | Blazing fast and accurate glob matcher written in JavaScript, with no dependencies and full support for standard and extended Bash glob features, including braces, extglobs, POSIX brackets, and regular expressions. | micromatch/picomatch | — |
+| Terceiro | transitiva | vite | 8.3.5 | Native-ESM powered web dev build tool | https://github.com/vitejs/vite | https://github.com/vitejs/vite |
 | Terceiro | transitiva | xtend | 4.0.2 | extend like a boss | git://github.com/Raynos/xtend | git://github.com/Raynos/xtend |
 <!-- specsfy:documentator:end -->

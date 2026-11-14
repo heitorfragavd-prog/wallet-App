@@ -751,7 +751,29 @@
 | npm | transitiva | zoid | 9.0.63 | Cross domain components. | git://github.com/krakenjs/zoid |
 | npm | transitiva | @babel/code-frame | 7.29.0 | Generate errors that contain a code frame that point to source locations. | https://github.com/babel/babel |
 | npm | transitiva | @babel/helper-validator-identifier | 7.28.5 | Validate identifier/keywords name | https://github.com/babel/babel |
+| npm | transitiva | @oxc-project/types | 0.156.0 | Types for Oxc AST nodes | https://github.com/oxc-project/oxc |
+| npm | transitiva | @rolldown/binding-android-arm-eabi | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-android-arm64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-darwin-arm64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-darwin-x64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-freebsd-x64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-arm-gnueabihf | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-arm64-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-arm64-musl | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-ppc64-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-s390x-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-x64-gnu | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-linux-x64-musl | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-openharmony-arm64 | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-win32-arm64-msvc | 1.2.16 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | @rolldown/binding-win32-x64-msvc | 1.2.16 | Fast JavaScript/TypeScript bundler in Rust with Rollup-compatible API. | https://github.com/rolldown/rolldown |
 | npm | transitiva | @types/pg | 8.23.1 | TypeScript definitions for pg | https://github.com/DefinitelyTyped/DefinitelyTyped |
+| npm | transitiva | @vitest/expect | 4.1.11 | Jest's expect matchers as a Chai plugin | https://github.com/vitest-dev/vitest |
+| npm | transitiva | @vitest/runner | 4.1.11 | Vitest test runner | https://github.com/vitest-dev/vitest |
+| npm | transitiva | @vitest/snapshot | 4.1.11 | Vitest snapshot manager | https://github.com/vitest-dev/vitest |
+| npm | transitiva | @vitest/spy | 4.1.11 | Lightweight Jest compatible spy implementation | https://github.com/vitest-dev/vitest |
+| npm | transitiva | chai | 6.3.0 | BDD/TDD assertion library for node.js and the browser. Test framework agnostic. | https://github.com/chaijs/chai |
+| npm | transitiva | nanoid | 3.3.20 | A tiny (116 bytes), secure URL-friendly unique string ID generator | ai/nanoid |
 | npm | transitiva | pg | 8.23.0 | PostgreSQL client - pure javascript & libpq with the same API | git://github.com/brianc/node-postgres |
 | npm | transitiva | pg-cloudflare | 1.4.0 | A socket implementation that can run on Cloudflare Workers using native TCP connections. | git://github.com/brianc/node-postgres |
 | npm | transitiva | pg-connection-string | 2.14.0 | Functions for dealing with a PostgreSQL connection string | git://github.com/brianc/node-postgres |
@@ -760,10 +782,17 @@
 | npm | transitiva | pg-protocol | 1.16.0 | The postgres client/server binary protocol, implemented in TypeScript | git://github.com/brianc/node-postgres |
 | npm | transitiva | pg-types | 2.2.0 | Query result type converters for node-postgres | git://github.com/brianc/node-pg-types |
 | npm | transitiva | pgpass | 1.0.5 | Module for reading .pgpass | https://github.com/hoegaarden/pgpass |
+| npm | transitiva | postcss | 8.5.32 | Tool for transforming styles with JS plugins | postcss/postcss |
 | npm | transitiva | postgres-array | 2.0.0 | Parse postgres array columns | bendrucker/postgres-array |
 | npm | transitiva | postgres-bytea | 1.0.1 | Postgres bytea parser | bendrucker/postgres-bytea |
 | npm | transitiva | postgres-date | 1.0.7 | Postgres date column parser | bendrucker/postgres-date |
 | npm | transitiva | postgres-interval | 1.2.0 | Parse Postgres interval columns | bendrucker/postgres-interval |
+| npm | transitiva | rolldown | 1.2.16 | Fast JavaScript/TypeScript bundler in Rust with Rollup-compatible API. | https://github.com/rolldown/rolldown |
+| npm | transitiva | source-map-js | 1.2.2 | Generates and consumes source maps | 7rulnik/source-map-js |
 | npm | transitiva | split2 | 4.2.0 | split a Text Stream into a Line Stream, using Stream 3 | https://github.com/mcollina/split2 |
+| npm | transitiva | vitest | 4.1.11 | Next generation testing framework powered by Vite | https://github.com/vitest-dev/vitest |
+| npm | transitiva | @vitest/mocker | 4.1.11 | Finalidade não descrita nos metadados locais. |  |
+| npm | transitiva | picomatch | 4.0.7 | Blazing fast and accurate glob matcher written in JavaScript, with no dependencies and full support for standard and extended Bash glob features, including braces, extglobs, POSIX brackets, and regular expressions. | micromatch/picomatch |
+| npm | transitiva | vite | 8.3.5 | Native-ESM powered web dev build tool | https://github.com/vitejs/vite |
 | npm | transitiva | xtend | 4.0.2 | extend like a boss | git://github.com/Raynos/xtend |
 <!-- specsfy:documentator:end -->
