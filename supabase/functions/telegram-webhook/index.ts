@@ -4745,6 +4745,7 @@ serve(async (req) => {
           formatDateBR,
           resolveColaboradorSeguro,
           resolveTurnoOperacional,
+          resolveTurnoOperacionalDetalhado,
           classifyDocumentType,
           consolidateFechamentoValues,
           summarizeEyemobileTransactions,
@@ -4753,8 +4754,8 @@ serve(async (req) => {
           buildOfficialClosingForwardMessage,
         } = await import("../_shared/ai/folguista-fechamento-engine.ts");
 
-        // 1. Data operacional no fuso America/Sao_Paulo (Gate 8)
-        const hojeDate = getOperationalDateBR(new Date());
+        // 1. Data operacional base no fuso America/Sao_Paulo (Gate 8)
+        const hojeDateBase = getOperationalDateBR(new Date());
 
         // 2. Busca colaboradores folguistas no workspace
         const { data: colabs } = await supabase
@@ -4767,7 +4768,7 @@ serve(async (req) => {
           .from("colaborador_escalas")
           .select("id, colaborador_id, data, turno, status")
           .eq("workspace_id", workspaceId)
-          .eq("data", hojeDate);
+          .eq("data", hojeDateBase);
 
         const senderTgId = (message?.from as Record<string, unknown> | undefined)?.id as number | undefined;
         const senderTgUsername = (message?.from as Record<string, unknown> | undefined)?.username as string | undefined;
@@ -4776,7 +4777,7 @@ serve(async (req) => {
           (message?.from as Record<string, unknown> | undefined)?.last_name,
         ].filter(Boolean).join(" ");
 
-        // Identificação segura (Gate 3) - Sem vinculação automática por nome coincidente
+        // Identificação segura (Gate 3 & Gate 4) - Sem vinculação automática por nome coincidente
         const idRes = resolveColaboradorSeguro({
           telegramUserId: senderTgId,
           telegramUsername: senderTgUsername,
@@ -4791,10 +4792,15 @@ serve(async (req) => {
         const colabNome = colab ? colab.nome : (senderFullName || `Folguista (TG ${senderTgId || "anônimo"})`);
         const escala = idRes.escala;
 
-        const turno = resolveTurnoOperacional({
+        // Resolução estrita de turno operacional com tratamento de janela de sobreposição e madrugada (Gate 3)
+        const resTurno = resolveTurnoOperacionalDetalhado({
           escala,
           captionOuTexto: promptText,
         });
+
+        const turno = resTurno.turno;
+        const hojeDate = resTurno.dataOperacionalEfetiva || hojeDateBase;
+        const isTurnoAmbiguo = Boolean(resTurno.isAmbiguo);
 
         let storagePath: string | null = null;
         let fileId: string | null = null;
@@ -5237,6 +5243,7 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           totalFotos: consolidado.anexosProcessados.filter((a) => !a.is_duplicata).length,
           identidadePendente,
           espelhamentoSucesso,
+          isAmbiguo: isTurnoAmbiguo,
         });
 
         await sendReply(msgFolguista);

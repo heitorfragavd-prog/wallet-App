@@ -102,37 +102,84 @@ export function normalizeTextSafe(text: string): string {
     .trim();
 }
 
+export interface TurnoOperacionalResolution {
+  turno: string;
+  isAmbiguo: boolean;
+  motivoAmbiguidade?: string;
+  dataOperacionalEfetiva: string;
+  origemDecisao: "escala" | "legenda_ou_relatorio" | "horario_operacional" | "madrugada_expediente_anterior";
+}
+
 /**
- * Determina o turno do colaborador com base na escala, horários operacionais da Rodo Point e comprovantes.
- * Regras:
- * - Prioridade 1: Escala cadastrada para o colaborador.
- * - Prioridade 2: Menção explícita na legenda/texto.
- * - Prioridade 3: Horário em America/Sao_Paulo:
- *   - Fins de semana:
- *     - Manhã: 05h00 às 14h30
- *     - Noite: 14h31 em diante (até 23h59)
- *   - Dias úteis: corte padrão às 13h30
+ * Determina o turno do colaborador com detalhamento analítico (Gate 3).
+ * Prioridade estrita:
+ * 1. Escala cadastrada e válida.
+ * 2. Funcionário responsável vinculado à escala.
+ * 3. Identificação do relatório de caixa ou legenda explícita.
+ * 4. Horários operacionais configurados:
+ *    - Fins de semana:
+ *      - 05h00 às 12h59: Manhã (Abertura)
+ *      - 13h00 às 14h30: Janela de sobreposição (AMBÍGUO se não houver escala/legenda)
+ *      - 14h31 às 23h59: Noite (Fechamento)
+ *      - 00h00 às 04h59: Noite do expediente anterior (saída da loja de madrugada)
  */
-export function resolveTurnoOperacional(params: {
+export function resolveTurnoOperacionalDetalhado(params: {
   escala?: EscalaInfo | null;
   horaEnvio?: Date;
   captionOuTexto?: string;
-}): string {
-  const { escala, horaEnvio, captionOuTexto } = params;
+  relatorioTexto?: string;
+}): TurnoOperacionalResolution {
+  const { escala, horaEnvio, captionOuTexto, relatorioTexto } = params;
+  const now = horaEnvio || new Date();
+  const hojeOp = getOperationalDateBR(now);
 
-  // 1. Escala ativa do colaborador é a fonte normativa primária
+  // 1. Escala ativa do colaborador é a fonte normativa primária (Prioridade 1 & 2)
   if (escala?.turno && escala.turno !== "outro") {
-    return escala.turno.toLowerCase();
+    const t = escala.turno.toLowerCase();
+    return {
+      turno: t,
+      isAmbiguo: false,
+      dataOperacionalEfetiva: escala.data || hojeOp,
+      origemDecisao: "escala",
+    };
   }
 
-  // 2. Menção na legenda
-  const txt = normalizeTextSafe(captionOuTexto || "");
-  if (txt.includes("manha") || txt.includes("abertura")) return "manha";
-  if (txt.includes("noite") || txt.includes("fechamento") || txt.includes("tarde")) return "noite";
-  if (txt.includes("integral")) return "integral";
+  // 2. Menção na legenda ou no texto do relatório (Prioridade 3)
+  const fullText = normalizeTextSafe(`${captionOuTexto || ""} ${relatorioTexto || ""}`);
+  if (fullText.includes("manha") || fullText.includes("abertura") || fullText.includes("1o turno") || fullText.includes("1º turno")) {
+    return {
+      turno: "manha",
+      isAmbiguo: false,
+      dataOperacionalEfetiva: hojeOp,
+      origemDecisao: "legenda_ou_relatorio",
+    };
+  }
 
-  // 3. Horário operacional no fuso America/Sao_Paulo
-  const now = horaEnvio || new Date();
+  if (
+    fullText.includes("noite") ||
+    fullText.includes("fechamento") ||
+    fullText.includes("2o turno") ||
+    fullText.includes("2º turno") ||
+    fullText.includes("tarde")
+  ) {
+    return {
+      turno: "noite",
+      isAmbiguo: false,
+      dataOperacionalEfetiva: hojeOp,
+      origemDecisao: "legenda_ou_relatorio",
+    };
+  }
+
+  if (fullText.includes("integral")) {
+    return {
+      turno: "integral",
+      isAmbiguo: false,
+      dataOperacionalEfetiva: hojeOp,
+      origemDecisao: "legenda_ou_relatorio",
+    };
+  }
+
+  // 3. Horário operacional no fuso America/Sao_Paulo (Prioridade 4)
   const timeFormatter = new Intl.DateTimeFormat("pt-BR", {
     timeZone: "America/Sao_Paulo",
     hour: "numeric",
@@ -152,19 +199,79 @@ export function resolveTurnoOperacional(params: {
   const weekday = weekdayFormatter.format(now).toLowerCase();
   const isWeekend = weekday.startsWith("sat") || weekday.startsWith("sun");
 
-  if (isWeekend) {
-    // Fins de semana: 05:00 às 14:30 = manhã
-    if (timeInMinutes >= 5 * 60 && timeInMinutes <= 14 * 60 + 30) {
-      return "manha";
-    }
-    return "noite";
+  // Madrugada pós-fechamento (00h00 às 04h59): folguista enviando após sair da loja
+  if (timeInMinutes < 5 * 60) {
+    // Retroage a data operacional para o dia anterior
+    const ontemEpoch = now.getTime() - 24 * 60 * 60 * 1000;
+    const ontemOp = getOperationalDateBR(new Date(ontemEpoch));
+    return {
+      turno: "noite",
+      isAmbiguo: false,
+      dataOperacionalEfetiva: ontemOp,
+      origemDecisao: "madrugada_expediente_anterior",
+    };
   }
 
-  // Dias úteis: corte às 13h30
-  if (timeInMinutes < 13 * 60 + 30) {
-    return "manha";
+  if (isWeekend) {
+    // Fins de semana:
+    // 05:00 às 12:59 -> Manhã
+    if (timeInMinutes < 13 * 60) {
+      return {
+        turno: "manha",
+        isAmbiguo: false,
+        dataOperacionalEfetiva: hojeOp,
+        origemDecisao: "horario_operacional",
+      };
+    }
+
+    // 13:00 às 14:30 -> Janela de sobreposição real na Rodo Point (AMBÍGUO se não houver escala/legenda)
+    if (timeInMinutes <= 14 * 60 + 30) {
+      return {
+        turno: "ambiguo_transicao",
+        isAmbiguo: true,
+        motivoAmbiguidade: `Envio realizado às ${timeParts.join(":")} (janela de sobreposição 13h00 às 14h30) sem escala ou indicação explícita. Requer validação de turno.`,
+        dataOperacionalEfetiva: hojeOp,
+        origemDecisao: "horario_operacional",
+      };
+    }
+
+    // 14:31 às 23:59 -> Noite
+    return {
+      turno: "noite",
+      isAmbiguo: false,
+      dataOperacionalEfetiva: hojeOp,
+      origemDecisao: "horario_operacional",
+    };
   }
-  return "noite";
+
+  // Dias úteis: corte padrão às 13h30
+  if (timeInMinutes < 13 * 60 + 30) {
+    return {
+      turno: "manha",
+      isAmbiguo: false,
+      dataOperacionalEfetiva: hojeOp,
+      origemDecisao: "horario_operacional",
+    };
+  }
+
+  return {
+    turno: "noite",
+    isAmbiguo: false,
+    dataOperacionalEfetiva: hojeOp,
+    origemDecisao: "horario_operacional",
+  };
+}
+
+/**
+ * Retorna o turno do colaborador como string pura retrocompatível.
+ */
+export function resolveTurnoOperacional(params: {
+  escala?: EscalaInfo | null;
+  horaEnvio?: Date;
+  captionOuTexto?: string;
+  relatorioTexto?: string;
+}): string {
+  return resolveTurnoOperacionalDetalhado(params).turno;
 }
 
 /**
@@ -660,12 +767,17 @@ export function buildFolguistaConfirmationMessage(params: {
   totalFotos: number;
   identidadePendente?: boolean;
   espelhamentoSucesso?: boolean;
+  isAmbiguo?: boolean;
 }): string {
-  const { nomeColaborador, dataFechamento, turno, totalFotos, identidadePendente, espelhamentoSucesso } = params;
+  const { nomeColaborador, dataFechamento, turno, totalFotos, identidadePendente, espelhamentoSucesso, isAmbiguo } = params;
 
   let msg = `✅ <b>Fechamento Recebido com Sucesso!</b>\n\n`;
   msg += `Olá, <b>${nomeColaborador}</b>! Recebemos seu envio para o turno de <b>${turno.toUpperCase()}</b> em <b>${dataFechamento}</b>.\n`;
   msg += `📸 Documentos recebidos: <b>${totalFotos} foto(s)/comprovante(s)</b>.\n\n`;
+
+  if (isAmbiguo) {
+    msg += `⚠️ <i>Atenção: Seu envio ocorreu no horário de sobreposição de turnos (13h00 às 14h30) sem escala vinculada. Caso seu fechamento seja especificamente da Noite ou da Manhã, você pode confirmar respondendo com "Manhã" ou "Noite".</i>\n\n`;
+  }
 
   if (identidadePendente) {
     msg += `ℹ️ <i>Aviso: Identificamos que seu perfil de Telegram aguarda validação cadastral da administração. Seus comprovantes foram salvos com segurança para conferência.</i>\n\n`;
