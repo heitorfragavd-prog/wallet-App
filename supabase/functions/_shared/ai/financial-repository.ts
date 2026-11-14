@@ -45,11 +45,12 @@ export interface FinancialDataQuery {
     | "wallet_business_goals"
     | "fechamentos_caixa"
     | "lembretes"
-    | "compromissos";
+    | "compromissos"
+    | "calendar_eventos_sincronizados";
   columns: string;
   equals: { workspace_id?: string; user_id?: string; [key: string]: unknown };
   dateRange?: {
-    column: "data" | "data_vencimento" | "data_emissao" | "created_at";
+    column: "data" | "data_vencimento" | "data_emissao" | "created_at" | "inicio";
     start: string;
     end: string;
   };
@@ -710,6 +711,37 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
             status: "agendado",
             local: row.local ? String(row.local) : null,
             createdAt: String(row.created_at ?? ""),
+          });
+        });
+      } catch (err) {
+        if (err instanceof Error && err.message === "repository_scope_mismatch") throw err;
+      }
+
+      try {
+        const calRows = await execute({
+          table: "calendar_eventos_sincronizados",
+          columns: "id,workspace_id,google_event_id,titulo,descricao,local,inicio,fim,dia_inteiro,status,criador_email",
+          equals: { workspace_id: context.workspaceId, status: "confirmed" },
+          dateRange: period ? { column: "inicio", ...period } : undefined,
+        });
+        calRows.forEach((row) => {
+          assertScope(row, context);
+          const inicioStr = String(row.inicio ?? "");
+          const dataStr = inicioStr ? inicioStr.slice(0, 10) : null;
+          const horaStr = inicioStr && inicioStr.length >= 16 ? inicioStr.slice(11, 16) : null;
+          results.push({
+            id: String(row.id),
+            userId: String(context.userId),
+            workspaceId: String(row.workspace_id),
+            sourceTable: "calendar_eventos_sincronizados",
+            titulo: String(row.titulo ?? "Reunião Google Calendar"),
+            descricao: row.descricao ? String(row.descricao) : null,
+            data: dataStr,
+            hora: horaStr,
+            tipo: "reuniao",
+            status: String(row.status ?? "confirmed"),
+            local: row.local ? String(row.local) : null,
+            createdAt: inicioStr,
           });
         });
       } catch (err) {
