@@ -253,13 +253,23 @@ export const ConversaDetailPanel: React.FC<ConversaDetailPanelProps> = ({
                           </Badge>
                         </div>
 
-                        {f.colaborador?.nome && (
+                        {(f.colaborador?.nome || f.identidade_pendente) && (
                           <div className="text-[11px] text-primary font-medium flex items-center gap-1">
                             <span>👤</span>
-                            <span>{f.colaborador.nome}</span>
+                            <span>{f.colaborador?.nome || "Folguista não vinculado"}</span>
+                            {f.identidade_pendente && (
+                              <Badge variant="outline" className="text-[9px] border-amber-500/50 text-amber-300 bg-amber-500/10">
+                                Identidade Pendente
+                              </Badge>
+                            )}
                             {f.turno && (
                               <span className="text-[10px] text-muted-foreground bg-muted/40 px-1 py-0.5 rounded uppercase">
                                 {f.turno}
+                              </span>
+                            )}
+                            {f.tipo_conferencia === "parcial" && (
+                              <span className="text-[9px] text-blue-300 bg-blue-500/10 px-1 py-0.5 rounded">
+                                Parcial
                               </span>
                             )}
                           </div>
