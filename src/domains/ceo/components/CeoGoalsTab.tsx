@@ -120,9 +120,9 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
 
   // Pesos dos dias da semana baseados nos últimos 30 dias de vendas
   const dayOfWeekWeights = useMemo(() => {
-    if (!kpis.dailySales30Days || kpis.dailySales30Days.length === 0) return null;
+    if (!kpis?.dailySales30Days || kpis.dailySales30Days.length === 0) return null;
     return calculateDayOfWeekWeights(kpis.dailySales30Days);
-  }, [kpis.dailySales30Days]);
+  }, [kpis?.dailySales30Days]);
 
   const loadGoals = useCallback(async () => {
     if (!workspaceId) return;
@@ -487,14 +487,15 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
     }
   };
 
-  const formatGoalValue = (val: number, unidade: BusinessGoalUnit) => {
+  const formatGoalValue = (val: number | null | undefined, unidade?: BusinessGoalUnit | string) => {
+    const num = typeof val === 'number' && Number.isFinite(val) ? val : 0;
     if (unidade === 'monetario' || unidade === 'BRL') {
-      return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(val);
+      return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(num);
     }
     if (unidade === 'percentual') {
-      return `${val.toFixed(1)}%`;
+      return `${num.toFixed(1)}%`;
     }
-    return new Intl.NumberFormat('pt-BR').format(val);
+    return new Intl.NumberFormat('pt-BR').format(num);
   };
 
   return (
@@ -579,7 +580,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                 <div className="flex items-baseline justify-between">
                   <div>
                     <span className="text-xs text-muted-foreground font-medium block">
-                      {highlightedWeekly.goal.titulo} ({highlightedWeekly.goal.indicador.replace('_', ' ')})
+                      {highlightedWeekly.goal.titulo} ({(highlightedWeekly.goal.indicador || 'meta').replace('_', ' ')})
                     </span>
                     <span className="text-2xl font-black text-foreground">
                       {formatGoalValue(highlightedWeekly.pacing.valor_realizado, highlightedWeekly.goal.unidade)}
@@ -597,10 +598,10 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-foreground">
-                      {highlightedWeekly.pacing.percentual_atingido.toFixed(1)}% atingido
+                      {(highlightedWeekly.pacing?.percentual_atingido ?? 0).toFixed(1)}% atingido
                     </span>
                     <span className="text-muted-foreground text-[11px]">
-                      Restam {highlightedWeekly.pacing.dias_restantes} {highlightedWeekly.pacing.dias_restantes === 1 ? 'dia' : 'dias'}
+                      Restam {highlightedWeekly.pacing?.dias_restantes ?? 0} {highlightedWeekly.pacing?.dias_restantes === 1 ? 'dia' : 'dias'}
                     </span>
                   </div>
                   <div className="w-full h-3 rounded-full bg-muted/60 overflow-hidden p-0.5 border border-border/40">
@@ -614,7 +615,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                           ? 'bg-amber-500'
                           : 'bg-red-500'
                       }`}
-                      style={{ width: `${Math.min(100, Math.max(0, highlightedWeekly.pacing.percentual_atingido))}%` }}
+                      style={{ width: `${Math.min(100, Math.max(0, highlightedWeekly.pacing?.percentual_atingido ?? 0))}%` }}
                     />
                   </div>
                 </div>
@@ -660,7 +661,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                       ) : (
                         <ArrowDownRight className="w-3.5 h-3.5" />
                       )}
-                      {highlightedWeekly.pacing.comparativo_periodo_anterior.delta_percent !== null
+                      {highlightedWeekly.pacing.comparativo_periodo_anterior.delta_percent !== null && Number.isFinite(highlightedWeekly.pacing.comparativo_periodo_anterior.delta_percent)
                         ? `${highlightedWeekly.pacing.comparativo_periodo_anterior.delta_percent.toFixed(1)}%`
                         : 'N/A'}
                     </span>
@@ -704,7 +705,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                 <div className="flex items-baseline justify-between">
                   <div>
                     <span className="text-xs text-muted-foreground font-medium block">
-                      {highlightedMonthly.goal.titulo} ({highlightedMonthly.goal.indicador.replace('_', ' ')})
+                      {highlightedMonthly.goal.titulo} ({(highlightedMonthly.goal.indicador || 'meta').replace('_', ' ')})
                     </span>
                     <span className="text-2xl font-black text-foreground">
                       {formatGoalValue(highlightedMonthly.pacing.valor_realizado, highlightedMonthly.goal.unidade)}
@@ -722,10 +723,10 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                 <div className="space-y-1.5">
                   <div className="flex items-center justify-between text-xs">
                     <span className="font-semibold text-foreground">
-                      {highlightedMonthly.pacing.percentual_atingido.toFixed(1)}% atingido
+                      {(highlightedMonthly.pacing?.percentual_atingido ?? 0).toFixed(1)}% atingido
                     </span>
                     <span className="text-muted-foreground text-[11px]">
-                      Restam {highlightedMonthly.pacing.dias_restantes} {highlightedMonthly.pacing.dias_restantes === 1 ? 'dia' : 'dias'}
+                      Restam {highlightedMonthly.pacing?.dias_restantes ?? 0} {highlightedMonthly.pacing?.dias_restantes === 1 ? 'dia' : 'dias'}
                     </span>
                   </div>
                   <div className="w-full h-3 rounded-full bg-muted/60 overflow-hidden p-0.5 border border-border/40">
@@ -739,7 +740,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                           ? 'bg-amber-500'
                           : 'bg-red-500'
                       }`}
-                      style={{ width: `${Math.min(100, Math.max(0, highlightedMonthly.pacing.percentual_atingido))}%` }}
+                      style={{ width: `${Math.min(100, Math.max(0, highlightedMonthly.pacing?.percentual_atingido ?? 0))}%` }}
                     />
                   </div>
                 </div>
@@ -782,7 +783,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                       ) : (
                         <ArrowDownRight className="w-3.5 h-3.5" />
                       )}
-                      {highlightedMonthly.pacing.comparativo_periodo_anterior.delta_percent !== null
+                      {highlightedMonthly.pacing.comparativo_periodo_anterior.delta_percent !== null && Number.isFinite(highlightedMonthly.pacing.comparativo_periodo_anterior.delta_percent)
                         ? `${highlightedMonthly.pacing.comparativo_periodo_anterior.delta_percent.toFixed(1)}%`
                         : 'N/A'}
                     </span>
@@ -881,7 +882,7 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                 <div className="flex items-start justify-between gap-2">
                   <div>
                     <span className="text-[10px] uppercase font-bold text-orange-400 tracking-wider block">
-                      {goal.periodo_tipo} • {goal.indicador.replace('_', ' ')}
+                      {goal.periodo_tipo} • {(goal.indicador || 'meta').replace('_', ' ')}
                     </span>
                     <CardTitle className="text-sm font-bold text-foreground mt-0.5">{goal.titulo}</CardTitle>
                   </div>
@@ -912,18 +913,18 @@ export const CeoGoalsTab: React.FC<CeoGoalsTabProps> = ({ workspaceId, kpis }) =
                           ? 'bg-amber-500'
                           : 'bg-red-500'
                       }`}
-                      style={{ width: `${Math.min(100, Math.max(0, pacing.percentual_atingido))}%` }}
+                      style={{ width: `${Math.min(100, Math.max(0, pacing?.percentual_atingido ?? 0))}%` }}
                     />
                   </div>
 
                   <div className="grid grid-cols-2 gap-2 text-[11px] pt-1">
                     <div className="bg-muted/20 p-1.5 rounded-lg border border-border/20">
                       <span className="text-muted-foreground block">Progresso</span>
-                      <span className="font-bold text-foreground">{pacing.percentual_atingido.toFixed(1)}%</span>
+                      <span className="font-bold text-foreground">{(pacing?.percentual_atingido ?? 0).toFixed(1)}%</span>
                     </div>
                     <div className="bg-muted/20 p-1.5 rounded-lg border border-border/20">
                       <span className="text-muted-foreground block">Dias Restantes</span>
-                      <span className="font-bold text-foreground">{pacing.dias_restantes} d</span>
+                      <span className="font-bold text-foreground">{pacing?.dias_restantes ?? 0} d</span>
                     </div>
                   </div>
                 </div>

@@ -22,11 +22,11 @@ interface CeoRoleGuardProps {
 export const CeoRoleGuard: React.FC<CeoRoleGuardProps> = ({ children }) => {
   const { user, loading: authLoading } = useAuth();
   const { profile, loading: profileLoading } = useProfile();
-  const { activeWorkspace, activeWorkspaceRole } = useWorkspace();
+  const { activeWorkspace, activeWorkspaceRole, loading: workspaceLoading } = useWorkspace();
   const { toast } = useToast();
   const navigate = useNavigate();
 
-  const isLoading = authLoading || profileLoading;
+  const isLoading = authLoading || profileLoading || workspaceLoading;
 
   // Prerrogativa executiva: Role de owner/admin no perfil, ou no workspace ativo, ou ser o criador do workspace
   const isOwnerOrAdmin =
@@ -34,7 +34,7 @@ export const CeoRoleGuard: React.FC<CeoRoleGuardProps> = ({ children }) => {
     profile?.role === 'admin' ||
     activeWorkspaceRole === 'owner' ||
     activeWorkspaceRole === 'admin' ||
-    Boolean(user?.id && activeWorkspace?.owner_id && user.id === activeWorkspace.owner_id);
+    Boolean(user?.id && (activeWorkspace?.owner_id === user.id || activeWorkspace?.user_id === user.id));
 
   const isStaff = isDeliveryStaffRole(profile?.role) || isDeliveryStaffRole(activeWorkspaceRole);
 
