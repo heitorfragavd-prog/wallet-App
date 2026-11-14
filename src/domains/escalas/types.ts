@@ -78,6 +78,10 @@ export interface EscalasConfig {
   notificacao_segunda_horario: string;
   notificacao_sexta_horario: string;
   simulacao_modo: boolean;
+  ativo_segunda?: boolean;
+  ativo_sexta?: boolean;
+  limite_tentativas?: number;
+  canal_preferencial?: "telegram" | "whatsapp_manual" | "web";
 }
 
 export interface EscalaSlot {
@@ -119,4 +123,85 @@ export interface ScheduleGenerationResult {
   turnosDescobertosCount: number;
   violacoes: EscalaValidationIssue[];
   sugestoes: string[];
+}
+
+export type TipoRotinaAutomacao =
+  | "consulta_segunda"
+  | "confirmacao_sexta"
+  | "lembrete"
+  | "busca_substituto"
+  | "simulacao";
+
+export type StatusRotinaAutomacao =
+  | "preparada"
+  | "executada"
+  | "erro"
+  | "simulada"
+  | "cancelada";
+
+export type FolguistaConfirmationStatus =
+  | "aguardando_confirmacao"
+  | "confirmado"
+  | "recusado"
+  | "substituicao_necessaria";
+
+export interface EscalaAutomacaoLog {
+  id: string;
+  workspace_id: string;
+  tipo_rotina: TipoRotinaAutomacao;
+  idempotency_key: string;
+  data_fim_semana_inicio: string;
+  data_fim_semana_fim: string;
+  status: StatusRotinaAutomacao;
+  destinatario_tipo: "grupo" | "individual" | "sistema";
+  destinatario_id?: string | null;
+  destinatario_nome?: string | null;
+  mensagem_texto: string;
+  vagas_identificadas: Array<{
+    data: string;
+    diaSemana: string;
+    turno: TurnoId;
+    horario: string;
+  }>;
+  respostas_processadas?: Array<{
+    colaborador_id: string;
+    colaborador_nome?: string;
+    texto_raw: string;
+    interpretacao: string;
+    data_resposta: string;
+  }>;
+  enviado_telegram: boolean;
+  erro_mensagem?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FolguistaDayAvailability {
+  disponivel: boolean;
+  turnos: TurnoId[];
+  ambigua: boolean;
+}
+
+export interface FolguistaAvailabilityParsed {
+  colaboradorId?: string;
+  colaboradorNome?: string;
+  disponibilidadeGeral: "disponivel" | "indisponivel" | "parcial" | "ambigua";
+  dias: {
+    sabado: FolguistaDayAvailability;
+    domingo: FolguistaDayAvailability;
+  };
+  preferencias?: string;
+  esclarecimentoNecessario: boolean;
+  perguntaEsclarecimento?: string;
+  respostaConfirmacaoAgradecimento: string;
+  tipoMensagem: "disponibilidade" | "confirmacao_presenca" | "desistencia" | "duvida" | "outro";
+}
+
+export interface FolguistaSubstitutionCandidate {
+  colaborador: ColaboradorFolguista;
+  pontuacao: number;
+  motivoPontuacao: string[];
+  atendeDescansoClt: boolean;
+  restricoes: string[];
+  recomendado: boolean;
 }
