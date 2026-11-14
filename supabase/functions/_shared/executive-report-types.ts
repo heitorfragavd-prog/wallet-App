@@ -93,6 +93,14 @@ export interface OperacaoIndicators {
   pendenciasFornecedoresQuantidade: number;
   problemasConciliacaoQuantidade: number;
   alertasOperacionais: string[];
+  compromissosHojeQuantidade?: number;
+  reunioesGoogleCalendarHojeQuantidade?: number;
+  eventosAgendaHoje?: Array<{
+    titulo: string;
+    hora?: string;
+    local?: string;
+    origem: 'google_calendar' | 'compromisso' | 'lembrete';
+  }>;
 }
 
 export interface ExecutiveReportFinancialIndicators {

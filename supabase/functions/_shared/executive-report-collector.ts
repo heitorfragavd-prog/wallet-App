@@ -528,7 +528,65 @@ export async function collectExecutiveReportIndicators(
         : [],
   };
 
-  // 5. OPERAÇÃO
+  // 5. OPERAÇÃO & AGENDA EXECUTIVA
+  let reunioesGoogleCalendarHojeQuantidade = 0;
+  let compromissosHojeQuantidade = 0;
+  const eventosAgendaHoje: Array<{
+    titulo: string;
+    hora?: string;
+    local?: string;
+    origem: 'google_calendar' | 'compromisso' | 'lembrete';
+  }> = [];
+
+  try {
+    const { data: calEvents } = await supabaseAdmin
+      .from("calendar_eventos_sincronizados")
+      .select("id, titulo, inicio, local, status")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "confirmed")
+      .gte("inicio", `${referenceDate}T00:00:00`)
+      .lte("inicio", `${referenceDate}T23:59:59`);
+
+    if (calEvents && calEvents.length > 0) {
+      sourcesConsulted.push("calendar_eventos_sincronizados");
+      reunioesGoogleCalendarHojeQuantidade = calEvents.length;
+      calEvents.forEach((ev: { titulo?: string; inicio?: string; local?: string }) => {
+        const horaStr = ev.inicio && ev.inicio.length >= 16 ? ev.inicio.slice(11, 16) : undefined;
+        eventosAgendaHoje.push({
+          titulo: ev.titulo || "Reunião Google Calendar",
+          hora: horaStr,
+          local: ev.local || undefined,
+          origem: "google_calendar",
+        });
+      });
+    }
+  } catch (calErr) {
+    console.warn("Aviso ao coletar eventos Google Calendar:", calErr);
+  }
+
+  try {
+    const { data: comps } = await supabaseAdmin
+      .from("compromissos")
+      .select("id, titulo, hora, local")
+      .eq("workspace_id", workspaceId)
+      .eq("data", referenceDate);
+
+    if (comps && comps.length > 0) {
+      sourcesConsulted.push("compromissos");
+      compromissosHojeQuantidade = comps.length;
+      comps.forEach((c: { titulo?: string; hora?: string; local?: string }) => {
+        eventosAgendaHoje.push({
+          titulo: c.titulo || "Compromisso Operacional",
+          hora: c.hora || undefined,
+          local: c.local || undefined,
+          origem: "compromisso",
+        });
+      });
+    }
+  } catch (compErr) {
+    console.warn("Aviso ao coletar compromissos locais:", compErr);
+  }
+
   const { data: lembretesPendentes } = await supabaseAdmin
     .from("lembretes")
     .select("id, status, data_limite")
@@ -547,6 +605,9 @@ export async function collectExecutiveReportIndicators(
     alertasEstoqueQuantidade: 0,
     pendenciasFornecedoresQuantidade: contasVencidasQuantidade,
     problemasConciliacaoQuantidade: possiveisDuplicidadesQuantidade,
+    compromissosHojeQuantidade,
+    reunioesGoogleCalendarHojeQuantidade,
+    eventosAgendaHoje,
     alertasOperacionais: [
       ...(atrasados.length > 0 ? [`${atrasados.length} atividade(s) atrasada(s).`] : []),
       ...(contasVencidasQuantidade > 0
@@ -554,6 +615,9 @@ export async function collectExecutiveReportIndicators(
         : []),
       ...(documentosGmailPendentesQuantidade > 0
         ? [`${documentosGmailPendentesQuantidade} documento(s) fiscal(is)/boleto(s) recebidos via Gmail aguardando conferência humana.`]
+        : []),
+      ...(eventosAgendaHoje.length > 0
+        ? [`${eventosAgendaHoje.length} compromisso(s)/reunião(ões) agendado(s) para hoje.`]
         : []),
     ],
   };
