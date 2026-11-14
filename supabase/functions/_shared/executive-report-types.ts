@@ -56,6 +56,10 @@ export interface DespesasIndicators {
   possiveisDuplicidadesQuantidade: number;
   possiveisDuplicidadesValor: number;
   alertaDespesasExtraordinarias?: string | null;
+  documentosGmailPendentesQuantidade?: number;
+  documentosGmailProcessados24h?: number;
+  boletosGmailIdentificados24h?: number;
+  nfeGmailExtraidas24h?: number;
 }
 
 export interface ResultadoOperacionalIndicators {
