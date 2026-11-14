@@ -75,6 +75,9 @@ export const AutomacoesSemanaisTab: React.FC<AutomacoesSemanaisTabProps> = ({
     handleTriggerMonday,
     handleTriggerFriday,
     handleSimulateFolguistaResponse,
+    handleApplyRealFolguistaResponse,
+    simulacaoResultado,
+    setSimulacaoResultado,
     handleOpenSubstituteSearch,
     loadAutomacoesLogs,
   } = useEscalasAutomacoes({
@@ -414,6 +417,81 @@ export const AutomacoesSemanaisTab: React.FC<AutomacoesSemanaisTabProps> = ({
               </Button>
             </div>
           </div>
+
+          {/* Resultado da Simulação (Gate 3 - Isolamento Total Garantido) */}
+          {simulacaoResultado && (
+            <div className="p-3.5 rounded-lg border border-purple-500/40 bg-purple-950/20 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Badge variant="outline" className="bg-purple-500/20 text-purple-300 border-purple-500/40 text-[10px]">
+                    SIMULAÇÃO PURA (DADOS REAIS PRESERVADOS)
+                  </Badge>
+                  <span className="text-xs font-semibold text-foreground">
+                    {simulacaoResultado.colaboradorNome}
+                  </span>
+                </div>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => setSimulacaoResultado(null)}
+                  className="h-6 px-2 text-[10px] text-muted-foreground hover:text-foreground"
+                >
+                  Fechar
+                </Button>
+              </div>
+
+              <div className="text-xs space-y-1.5">
+                <div className="text-muted-foreground">
+                  <strong className="text-foreground">Interpretação da IA:</strong>{" "}
+                  {simulacaoResultado.interpretacao.tipoMensagem.toUpperCase()} — {simulacaoResultado.interpretacao.disponibilidadeGeral}
+                </div>
+                <div className="p-2 rounded bg-background/50 border border-border/40 text-xs italic text-foreground/90">
+                  "{simulacaoResultado.interpretacao.respostaConfirmacaoAgradecimento}"
+                </div>
+              </div>
+
+              {simulacaoResultado.acoesPropostas.length > 0 && (
+                <div className="space-y-1">
+                  <span className="text-[11px] font-medium text-muted-foreground">
+                    Ações propostas para a escala (NÃO aplicadas automaticamente):
+                  </span>
+                  <div className="flex flex-wrap gap-1.5 pt-1">
+                    {simulacaoResultado.acoesPropostas.map((acao, idx) => (
+                      <Badge
+                        key={idx}
+                        variant="secondary"
+                        className="text-[11px] bg-secondary/80 text-foreground py-0.5 px-2"
+                      >
+                        {acao.descricao}
+                      </Badge>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <div className="pt-2 border-t border-purple-500/20 flex items-center justify-between">
+                <span className="text-[11px] text-muted-foreground">
+                  Deseja oficializar essas alterações na matriz de disponibilidade?
+                </span>
+                <Button
+                  type="button"
+                  size="sm"
+                  onClick={() =>
+                    handleApplyRealFolguistaResponse(
+                      simulacaoResultado.colaboradorId,
+                      simulacaoResultado.textoOriginal,
+                      simIsFriday
+                    )
+                  }
+                  className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700 text-white font-medium gap-1"
+                >
+                  <CheckCircle2 className="w-3 h-3" />
+                  Aplicar na Escala Real
+                </Button>
+              </div>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -474,18 +552,36 @@ export const AutomacoesSemanaisTab: React.FC<AutomacoesSemanaisTabProps> = ({
                         {log.mensagem_texto}
                       </td>
                       <td className="py-2.5 px-3 whitespace-nowrap">
-                        <Badge
-                          variant="outline"
-                          className={
-                            log.status === "executada"
-                              ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]"
-                              : log.status === "simulada"
-                              ? "bg-purple-500/10 text-purple-400 border-purple-500/20 text-[10px]"
-                              : "text-[10px]"
-                          }
-                        >
-                          {log.status}
-                        </Badge>
+                        <div className="flex items-center gap-1">
+                          <Badge
+                            variant="outline"
+                            className={
+                              log.status === "executada"
+                                ? "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 text-[10px]"
+                                : log.status === "simulada"
+                                ? "bg-purple-500/10 text-purple-400 border-purple-500/20 text-[10px]"
+                                : "text-[10px]"
+                            }
+                          >
+                            {log.status}
+                          </Badge>
+                          {log.status_envio && (
+                            <Badge
+                              variant="secondary"
+                              className={
+                                log.status_envio === "enviada"
+                                  ? "bg-emerald-600/20 text-emerald-300 text-[9px]"
+                                  : log.status_envio === "falha"
+                                  ? "bg-rose-500/20 text-rose-300 text-[9px]"
+                                  : log.status_envio === "simulada"
+                                  ? "bg-purple-500/20 text-purple-300 text-[9px]"
+                                  : "text-[9px]"
+                              }
+                            >
+                              {log.status_envio}
+                            </Badge>
+                          )}
+                        </div>
                       </td>
                       <td className="py-2.5 px-3 font-mono text-[10px] text-muted-foreground max-w-[120px] truncate" title={log.idempotency_key}>
                         {log.idempotency_key}

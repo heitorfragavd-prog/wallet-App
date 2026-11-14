@@ -139,6 +139,15 @@ export type StatusRotinaAutomacao =
   | "simulada"
   | "cancelada";
 
+export type TelegramEnvioStatus =
+  | "preparada"
+  | "aguardando_envio"
+  | "enviando"
+  | "enviada"
+  | "falha"
+  | "cancelada"
+  | "simulada";
+
 export type FolguistaConfirmationStatus =
   | "aguardando_confirmacao"
   | "confirmado"
@@ -171,9 +180,33 @@ export interface EscalaAutomacaoLog {
     data_resposta: string;
   }>;
   enviado_telegram: boolean;
+  status_envio?: TelegramEnvioStatus;
+  telegram_message_id?: string | null;
+  api_response?: Record<string, unknown> | null;
+  tentativas?: number;
+  erro_detalhes?: string | null;
   erro_mensagem?: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface AcaoPropostaSimulada {
+  tipo: "disponibilidade" | "confirmacao" | "desistencia" | "indisponibilidade" | "ambigua";
+  data: string;
+  turno: TurnoId;
+  descricao: string;
+  detalhes: string;
+}
+
+export interface SimulacaoRespostaFolguistaResult {
+  sucesso: boolean;
+  simulada: true;
+  colaboradorId: string;
+  colaboradorNome: string;
+  textoOriginal: string;
+  interpretacao: FolguistaParsedResponse;
+  acoesPropostas: AcaoPropostaSimulada[];
+  resumoAcao: string;
 }
 
 export interface FolguistaDayAvailability {

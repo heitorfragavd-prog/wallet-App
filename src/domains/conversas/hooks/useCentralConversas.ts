@@ -210,6 +210,7 @@ export function useCentralConversas() {
             "id, workspace_id, chat_id, nome_grupo, descricao, tipo_grupo, ativo, ferramentas_permitidas, dados_permitidos, acoes_permitidas, funcionalidades_autorizadas, config, created_at, updated_at",
           )
           .eq("workspace_id", workspaceId)
+          .eq("ativo", true)
           .order("created_at", { ascending: true }),
         supabase
           .from("grupo_participantes" as never)
