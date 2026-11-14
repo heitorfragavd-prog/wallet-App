@@ -80,6 +80,12 @@ export function generateDeterministicSynthesis(
     );
   }
 
+  if ((despesas.documentosGmailPendentesQuantidade || 0) > 0) {
+    resumoLinhas.push(
+      `Documentos recebidos: ${despesas.documentosGmailPendentesQuantidade} documento(s) fiscal(is)/boleto(s) via Gmail aguardando validação.`
+    );
+  }
+
   const executiveSummary = resumoLinhas.join(" ");
 
   // 2. Geração das Recomendações Prioritárias (Até 5)
@@ -138,7 +144,20 @@ export function generateDeterministicSynthesis(
     });
   }
 
-  // Recomendação 5: Atividades e Tarefas Atrasadas
+  // Recomendação 5: Documentos Fiscais e Boletos Gmail Aguardando Conferência
+  if ((despesas.documentosGmailPendentesQuantidade || 0) > 0 && recommendations.length < 5) {
+    recommendations.push({
+      numero: recIndex++,
+      titulo: "Validar documentos fiscais e boletos recebidos via Gmail",
+      problemaOuOportunidade: `Existem ${despesas.documentosGmailPendentesQuantidade} documento(s) fiscal(is)/boleto(s) capturados no e-mail rodopointcafe@gmail.com aguardando conferência humana.`,
+      evidencia: `${despesas.documentosGmailProcessados24h || 0} e-mail(s) processado(s) nas últimas 24h.`,
+      impactoEstimado: "Evita multas por atraso de boletos e garante escrituração correta de NF-e.",
+      grauConfianca: "alto",
+      acaoRecomendada: "Acessar a Central de Documentos do Gmail no Wallet e aprovar ou vincular os boletos e notas fiscais ao contas a pagar.",
+    });
+  }
+
+  // Recomendação 6: Atividades e Tarefas Atrasadas
   if (operacao.atividadesAtrasadasQuantidade > 0 && recommendations.length < 5) {
     recommendations.push({
       numero: recIndex++,

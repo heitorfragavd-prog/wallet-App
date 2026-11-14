@@ -58,6 +58,8 @@ import { PaymentMethod } from "@/domains/finance/types";
 import { Checkbox } from "@/shared/components/ui/checkbox";
 import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { format } from "date-fns";
+import { useWorkspace } from "@/contexts/WorkspaceContext";
+import { GmailDocumentsDashboard } from "@/domains/gmail/components/GmailDocumentsDashboard";
 import { ptBR } from "date-fns/locale";
 import { usePrivacy } from "@/contexts/PrivacyContext";
 
@@ -145,6 +147,8 @@ const paymentMethodLabels: Record<PaymentMethod, string> = {
 
 const Dividas = () => {
   const { toast } = useToast();
+  const { activeWorkspace } = useWorkspace();
+  const workspaceId = activeWorkspace?.id ?? "";
   const { isPrivate, formatCurrency } = usePrivacy();
   const { categoriasDespesa } = useCategorias();
   const { contas } = useContasUsuario();
@@ -617,10 +621,11 @@ const Dividas = () => {
 
         {/* Tabs */}
         <Tabs value={activeTab} onValueChange={setActiveTab} className="space-y-4">
-          <TabsList className="grid w-full grid-cols-3">
+          <TabsList className="grid w-full grid-cols-2 sm:grid-cols-4">
             <TabsTrigger value="lista">Lista de Dívidas</TabsTrigger>
             <TabsTrigger value="adicionar">Adicionar Dívida</TabsTrigger>
             <TabsTrigger value="historico">Histórico</TabsTrigger>
+            <TabsTrigger value="gmail">Documentos Gmail</TabsTrigger>
           </TabsList>
 
           <TabsContent value="lista" className="space-y-4">
@@ -1575,6 +1580,10 @@ const Dividas = () => {
                 )}
               </CardContent>
             </Card>
+          </TabsContent>
+
+          <TabsContent value="gmail" className="space-y-4">
+            <GmailDocumentsDashboard workspaceId={workspaceId} />
           </TabsContent>
         </Tabs>
 
