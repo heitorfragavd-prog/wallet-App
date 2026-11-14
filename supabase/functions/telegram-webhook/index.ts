@@ -4738,30 +4738,36 @@ serve(async (req) => {
 
       // Se for envio de Fechamento / Fotos / Comprovantes de Turno dos Folguistas (Etapa 3D)
       if (isFechamentoEnvio) {
-        console.log("[telegram-webhook] [Etapa 3D] Foto/Comprovante de fechamento recebido no grupo Folguistas");
+        console.log("[telegram-webhook] [Etapa 3D.1] Foto/Comprovante de fechamento recebido no grupo Folguistas");
 
-        // 1. Busca colaboradores folguistas no workspace
+        const {
+          getOperationalDateBR,
+          formatDateBR,
+          resolveColaboradorSeguro,
+          resolveTurnoOperacional,
+          classifyDocumentType,
+          consolidateFechamentoValues,
+          summarizeEyemobileTransactions,
+          compareFechamentoVsEyemobile,
+          buildFolguistaConfirmationMessage,
+          buildOfficialClosingForwardMessage,
+        } = await import("../_shared/ai/folguista-fechamento-engine.ts");
+
+        // 1. Data operacional no fuso America/Sao_Paulo (Gate 8)
+        const hojeDate = getOperationalDateBR(new Date());
+
+        // 2. Busca colaboradores folguistas no workspace
         const { data: colabs } = await supabase
           .from("colaboradores")
           .select("id, nome, tipo, status, telefone, telegram_user_id, telegram_username")
           .eq("workspace_id", workspaceId)
           .neq("status", "inativo");
 
-        const hojeDate = new Date().toISOString().split("T")[0];
         const { data: escalasHoje } = await supabase
           .from("colaborador_escalas")
           .select("id, colaborador_id, data, turno, status")
           .eq("workspace_id", workspaceId)
           .eq("data", hojeDate);
-
-        const {
-          resolveColaboradorSeguro,
-          resolveTurnoOperacional,
-          summarizeEyemobileTransactions,
-          compareFechamentoVsEyemobile,
-          buildFolguistaConfirmationMessage,
-          buildOfficialClosingForwardMessage,
-        } = await import("../_shared/ai/folguista-fechamento-engine.ts");
 
         const senderTgId = (message?.from as Record<string, unknown> | undefined)?.id as number | undefined;
         const senderTgUsername = (message?.from as Record<string, unknown> | undefined)?.username as string | undefined;
@@ -4770,6 +4776,7 @@ serve(async (req) => {
           (message?.from as Record<string, unknown> | undefined)?.last_name,
         ].filter(Boolean).join(" ");
 
+        // Identificação segura (Gate 3) - Sem vinculação automática por nome coincidente
         const idRes = resolveColaboradorSeguro({
           telegramUserId: senderTgId,
           telegramUsername: senderTgUsername,
@@ -4780,19 +4787,9 @@ serve(async (req) => {
 
         const colab = idRes.colaborador;
         const colabId = colab?.id || null;
-        const colabNome = colab?.nome || senderFullName || "Folguista";
+        const identidadePendente = idRes.identidadePendente;
+        const colabNome = colab ? colab.nome : (senderFullName || `Folguista (TG ${senderTgId || "anônimo"})`);
         const escala = idRes.escala;
-
-        // Se identificado por nome + escala, persiste o telegram_user_id imutável no banco para blindar futuras requisições
-        if (idRes.modo === "nome_e_escala" && colabId && senderTgId) {
-          await supabase
-            .from("colaboradores")
-            .update({
-              telegram_user_id: senderTgId,
-              telegram_username: senderTgUsername || null,
-            })
-            .eq("id", colabId);
-        }
 
         const turno = resolveTurnoOperacional({
           escala,
@@ -4801,7 +4798,10 @@ serve(async (req) => {
 
         let storagePath: string | null = null;
         let fileId: string | null = null;
+        let fileSha256: string | null = null;
         let finalImageBase64Uri = "";
+        let mimeType = "image/jpeg";
+        let uploadErrorDetail: string | null = null;
 
         if (hasPhoto || hasDoc) {
           fileId = hasPhoto
@@ -4818,20 +4818,50 @@ serve(async (req) => {
               const downloadResp = await fetch(`https://api.telegram.org/file/bot${telegramBotToken}/${filePath}`);
               if (downloadResp.ok) {
                 const fileBytes = new Uint8Array(await downloadResp.arrayBuffer());
+
+                // Cálculo de hash SHA-256 para detecção de fotos repetidas (Gate 6)
+                const hashBuf = await crypto.subtle.digest("SHA-256", fileBytes);
+                fileSha256 = Array.from(new Uint8Array(hashBuf))
+                  .map((b) => b.toString(16).padStart(2, "0"))
+                  .join("");
+
+                if (ext === "pdf") {
+                  mimeType = "application/pdf";
+                } else if (ext === "png") {
+                  mimeType = "image/png";
+                } else {
+                  mimeType = "image/jpeg";
+                }
+
                 const fileName = `fechamento_${hojeDate}_${Date.now()}_${fileId}.${ext}`;
                 storagePath = `groups/${workspaceId}/${grupoConfig.id}/${fileName}`;
 
-                // Upload para bucket privado chat-attachments
-                await supabase.storage.from("chat-attachments").upload(storagePath, fileBytes, {
-                  contentType: `image/${ext === "jpg" ? "jpeg" : ext}`,
+                // Upload para bucket privado chat-attachments com verificação de erro (Gate 6)
+                const { error: upErr } = await supabase.storage.from("chat-attachments").upload(storagePath, fileBytes, {
+                  contentType: mimeType,
                   upsert: true,
                 });
 
-                const b64 = base64Encode(fileBytes);
-                finalImageBase64Uri = `data:image/jpeg;base64,${b64}`;
+                if (upErr) {
+                  console.error("[telegram-webhook] Falha no upload de imagem de fechamento:", upErr);
+                  uploadErrorDetail = upErr.message;
+                  storagePath = null;
+                } else if (mimeType.startsWith("image/")) {
+                  const b64 = base64Encode(fileBytes);
+                  finalImageBase64Uri = `data:${mimeType};base64,${b64}`;
+                }
               }
             }
           }
+        }
+
+        // Se o upload falhou, não finge sucesso para o folguista (Gate 6)
+        if ((hasPhoto || hasDoc) && !storagePath) {
+          await sendReply(
+            `⚠️ <b>Aviso de Armazenamento:</b> Não foi possível salvar o arquivo do comprovante devido a uma instabilidade temporária.\n` +
+            `Por favor, tente reenviar a fotografia ou o documento.`
+          );
+          return new Response("OK", { status: 200, headers: corsHeaders });
         }
 
         let valoresExtraidos = {
@@ -4840,8 +4870,10 @@ serve(async (req) => {
           credito: 0,
           pix: 0,
           voucher: 0,
+          outros: 0,
         };
         let sobraInformada = 0;
+        let aiTipoDoc = "comprovante_individual";
 
         const matchSobra = promptText.match(/sobra[:\s]*R?\$?\s*([\d.,]+)/i);
         if (matchSobra) {
@@ -4851,19 +4883,21 @@ serve(async (req) => {
 
         if (finalImageBase64Uri) {
           const promptConferencia = `Você é um conferente especialista de fechamento de caixa e envelopes da Rodo Point.
-Analise esta imagem (envelope de fechamento, relatório de caixa, comprovante de maquininha ou resumo) e extraia os valores por forma de pagamento:
+Analise esta imagem (envelope de fechamento, relatório de caixa totalizador, filipeta de cartão ou comprovante Pix) e extraia os valores por forma de pagamento:
 - Dinheiro
 - Cartão Débito
 - Cartão Crédito
 - Pix
 - Voucher (somente se indicar VA, VR, Alimentação, Refeição, Alelo, Sodexo, Ticket)
-- Sobra (se houver valor anotado como sobra)
+- Outros (método não identificado)
+- Sobra (se houver valor anotado como sobra de caixa)
+- Tipo de documento: "relatorio_consolidado" (se for o fechamento geral do caixa/Z fiscal), "envelope" (se for foto do envelope com anotações), "comprovante_voucher" (filipeta de voucher), ou "comprovante_individual" (filipeta única de cartão/pix).
 
 Responda ESTRITAMENTE em formato JSON (sem markdown):
 {
-  "tipo": "fechamento",
+  "tipo_documento": "relatorio_consolidado",
   "data": "DD/MM/AAAA",
-  "total": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0 },
+  "total": { "dinheiro": 0, "debito": 0, "credito": 0, "pix": 0, "voucher": 0, "outros": 0 },
   "sobra": 0
 }`;
 
@@ -4903,8 +4937,12 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
                 valoresExtraidos.credito = Number(tot.credito) || 0;
                 valoresExtraidos.pix = Number(tot.pix) || 0;
                 valoresExtraidos.voucher = Number(tot.voucher) || 0;
+                valoresExtraidos.outros = Number(tot.outros) || 0;
                 if (Number(parsed.sobra) > 0 && sobraInformada === 0) {
                   sobraInformada = Number(parsed.sobra);
+                }
+                if (parsed.tipo_documento) {
+                  aiTipoDoc = parsed.tipo_documento;
                 }
               }
             }
@@ -4913,7 +4951,13 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
           }
         }
 
-        // Consultar vendas Eyemobile deduplicadas (Gate 8)
+        const tipoDocumentoFinal = classifyDocumentType({
+          caption: promptText,
+          detectedValues: valoresExtraidos,
+          isDocPdf: mimeType === "application/pdf",
+        }) || (aiTipoDoc as any) || "comprovante_individual";
+
+        // Consultar vendas Eyemobile deduplicadas (Gate 2 & Gate 8)
         let qVendas = supabase
           .from("transacoes")
           .select("id, valor, metodo_pagamento, tipo, status, descricao, observacoes, origem, deduplication_key")
@@ -4925,28 +4969,9 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
 
         const { data: txsHoje } = await qVendas;
         const eyemobileSummary = summarizeEyemobileTransactions(txsHoje || []);
-        const diferencas = compareFechamentoVsEyemobile(valoresExtraidos as any, eyemobileSummary);
 
         const colabKey = colabId || `pendente_${senderTgId || "anon"}`;
         const chaveOperacional = `${workspaceId}_${hojeDate}_${colabKey}_${turno}`;
-
-        const { data: fechExistente } = await supabase
-          .from("fechamentos_caixa")
-          .select("*")
-          .eq("workspace_id", workspaceId)
-          .eq("chave_operacional", chaveOperacional)
-          .maybeSingle();
-
-        const novoAnexoItem = {
-          id: crypto.randomUUID(),
-          file_id: fileId || "",
-          storage_path: storagePath || "",
-          mime_type: hasPhoto ? "image/jpeg" : "application/octet-stream",
-          tipo_documento: "envelope",
-          caption: promptText,
-          created_at: new Date().toISOString(),
-          valor_extraido: valoresExtraidos,
-        };
 
         // Busca grupo oficial de fechamento canônico (Gate 2)
         const { data: canonicalFechamentoGrupo } = await supabase
@@ -4960,47 +4985,84 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         const grupoOficialId = canonicalFechamentoGrupo?.id || grupoConfig.id;
         const grupoOficialChatId = canonicalFechamentoGrupo?.chat_id || chatId;
 
+        const novoAnexoItem = {
+          id: crypto.randomUUID(),
+          file_id: fileId || "",
+          storage_path: storagePath || "",
+          mime_type: mimeType,
+          tipo_documento: tipoDocumentoFinal,
+          caption: promptText,
+          created_at: new Date().toISOString(),
+          sha256: fileSha256 || undefined,
+          valor_extraido: {
+            ...valoresExtraidos,
+            sobra: sobraInformada > 0 ? sobraInformada : undefined,
+          },
+        };
+
+        // Consolidação atômica e segura (Gate 1 & Gate 4)
+        const { data: fechExistente } = await supabase
+          .from("fechamentos_caixa")
+          .select("*")
+          .eq("workspace_id", workspaceId)
+          .eq("chave_operacional", chaveOperacional)
+          .maybeSingle();
+
+        let todosAnexos: any[] = [];
+        let telegramMsgs: number[] = [];
+
+        if (fechExistente) {
+          todosAnexos = Array.isArray(fechExistente.anexos) ? [...fechExistente.anexos] : [];
+          if (storagePath) todosAnexos.push(novoAnexoItem);
+          telegramMsgs = Array.isArray(fechExistente.telegram_message_ids) ? [...fechExistente.telegram_message_ids] : [];
+          if (message.message_id && !telegramMsgs.includes(message.message_id)) {
+            telegramMsgs.push(message.message_id);
+          }
+        } else {
+          todosAnexos = storagePath ? [novoAnexoItem] : [];
+          telegramMsgs = message.message_id ? [message.message_id] : [];
+        }
+
+        // Consolidação precisa sem Math.max cego nem soma duplicada (Gate 1)
+        const consolidado = consolidateFechamentoValues(todosAnexos);
+        const valoresFinais = consolidado.valores;
+        const sobraFinal = consolidado.sobra > 0 ? consolidado.sobra : (fechExistente?.sobra || 0);
+
+        // Auditoria com o Eyemobile (Gate 2)
+        const conferenciaEyemobile = compareFechamentoVsEyemobile({
+          envelope: valoresFinais,
+          eyemobile: eyemobileSummary,
+          turno,
+        });
+
+        const statusFechamento =
+          conferenciaEyemobile.status === "divergencia"
+            ? "divergencia"
+            : "pendente_conferencia";
+
         let fechamentoFinalId = "";
-        let anexosFinais: any[] = [];
 
         if (fechExistente) {
           fechamentoFinalId = fechExistente.id;
-          anexosFinais = Array.isArray(fechExistente.anexos) ? [...fechExistente.anexos] : [];
-          if (storagePath) anexosFinais.push(novoAnexoItem);
-
-          const currentMsgs = Array.isArray(fechExistente.telegram_message_ids) ? fechExistente.telegram_message_ids : [];
-          if (message.message_id && !currentMsgs.includes(message.message_id)) {
-            currentMsgs.push(message.message_id);
-          }
-
-          const prevTot = (fechExistente.total || {}) as Record<string, number>;
-          const mergedTot = {
-            dinheiro: Math.max(Number(prevTot.dinheiro) || 0, valoresExtraidos.dinheiro),
-            debito: Math.max(Number(prevTot.debito) || 0, valoresExtraidos.debito),
-            credito: Math.max(Number(prevTot.credito) || 0, valoresExtraidos.credito),
-            pix: Math.max(Number(prevTot.pix) || 0, valoresExtraidos.pix),
-            voucher: (Number(prevTot.voucher) || 0) + (valoresExtraidos.voucher > 0 && valoresExtraidos.voucher !== Number(prevTot.voucher) ? valoresExtraidos.voucher : 0),
-          };
-
-          const mergedDiffs = compareFechamentoVsEyemobile(mergedTot as any, eyemobileSummary);
-
           await supabase
             .from("fechamentos_caixa")
             .update({
-              anexos: anexosFinais,
-              telegram_message_ids: currentMsgs,
-              total: mergedTot,
-              envelope_total: mergedTot,
+              anexos: consolidado.anexosProcessados,
+              telegram_message_ids: telegramMsgs,
+              total: valoresFinais,
+              envelope_total: valoresFinais,
               eyemobile_total: eyemobileSummary,
-              divergencias: mergedDiffs,
-              sobra: sobraInformada > 0 ? sobraInformada : fechExistente.sobra,
-              status: mergedDiffs.length > 0 ? "divergencia" : "pendente_conferencia",
+              divergencias: conferenciaEyemobile.diferencas,
+              tipo_conferencia: conferenciaEyemobile.tipoConferencia,
+              sobra: sobraFinal > 0 ? sobraFinal : null,
+              status: statusFechamento,
+              identidade_pendente: identidadePendente,
               updated_at: new Date().toISOString(),
             })
             .eq("id", fechExistente.id);
         } else {
-          anexosFinais = storagePath ? [novoAnexoItem] : [];
-          const { data: newFech } = await supabase
+          // Criação com unicidade segura via chave operacional (Gate 4)
+          const { data: newFech, error: insErr } = await supabase
             .from("fechamentos_caixa")
             .insert({
               workspace_id: workspaceId,
@@ -5011,90 +5073,170 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
               origem_canal: "telegram",
               colaborador_id: colabId,
               escala_id: escala?.id || null,
-              turno: turno,
+              turno,
               chave_operacional: chaveOperacional,
-              data_fechamento: hojeDate.split("-").reverse().join("/"),
-              total: valoresExtraidos,
-              envelope_total: valoresExtraidos,
+              data_fechamento: formatDateBR(hojeDate),
+              total: valoresFinais,
+              envelope_total: valoresFinais,
               eyemobile_total: eyemobileSummary,
-              sobra: sobraInformada > 0 ? sobraInformada : null,
-              divergencias: diferencas,
-              status: diferencas.length > 0 ? "divergencia" : "pendente_conferencia",
-              anexos: anexosFinais,
+              sobra: sobraFinal > 0 ? sobraFinal : null,
+              divergencias: conferenciaEyemobile.diferencas,
+              tipo_conferencia: conferenciaEyemobile.tipoConferencia,
+              status: statusFechamento,
+              identidade_pendente: identidadePendente,
+              status_espelhamento: "pendente",
+              anexos: consolidado.anexosProcessados,
               anexo_path: storagePath || null,
-              telegram_message_ids: [message.message_id],
+              telegram_message_ids: telegramMsgs,
             })
             .select("id")
             .single();
 
-          fechamentoFinalId = newFech?.id || "";
+          if (insErr) {
+            console.warn("[telegram-webhook] Insert direto falhou, tentando upsert de concorrência:", insErr);
+            // Em caso de colisão de webhook simultâneo, recupera o registro criado pelo outro worker
+            const { data: recovFech } = await supabase
+              .from("fechamentos_caixa")
+              .select("id")
+              .eq("workspace_id", workspaceId)
+              .eq("chave_operacional", chaveOperacional)
+              .maybeSingle();
+            fechamentoFinalId = recovFech?.id || "";
+          } else {
+            fechamentoFinalId = newFech?.id || "";
+          }
         }
 
-        // Encaminhamento ao grupo oficial (Gate 9)
-        const msgOficial = buildOfficialClosingForwardMessage({
+        // Encaminhamento ao grupo oficial com proteção de limites Telegram (Gate 7)
+        const { captionResumido, relatorioCompleto } = buildOfficialClosingForwardMessage({
           colaboradorNome: colabNome,
-          dataFechamento: hojeDate.split("-").reverse().join("/"),
+          dataFechamento: formatDateBR(hojeDate),
           turno,
-          envelope: valoresExtraidos as any,
+          envelope: valoresFinais,
           eyemobile: eyemobileSummary,
-          diferencas,
-          status: diferencas.length > 0 ? "divergencia" : "pendente_conferencia",
-          sobra: sobraInformada,
-          totalFotos: anexosFinais.length,
+          conferencia: conferenciaEyemobile,
+          sobra: sobraFinal,
+          totalFotos: consolidado.anexosProcessados.filter((a) => !a.is_duplicata).length,
+          fotosDuplicadasIgnoradas: consolidado.anexosProcessados.filter((a) => a.is_duplicata).length,
           fechamentoId: fechamentoFinalId,
+          identidadePendente,
         });
 
+        let espelhamentoSucesso = false;
+
         if (grupoOficialChatId && telegramBotToken) {
-          if (hasPhoto && fileId) {
-            const sendPhotoResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chat_id: grupoOficialChatId,
-                photo: fileId,
-                caption: msgOficial,
-                parse_mode: "HTML",
-              }),
-            });
-            const photoSent = await sendPhotoResp.json();
-            if (photoSent?.ok && fechamentoFinalId) {
-              await supabase
-                .from("fechamentos_caixa")
-                .update({
-                  espelhado_em: new Date().toISOString(),
-                  espelhado_message_id: photoSent.result?.message_id,
-                })
-                .eq("id", fechamentoFinalId);
+          try {
+            if (hasPhoto && fileId) {
+              // 1. Envia a foto com a legenda resumida (máximo 1024 caracteres garantido)
+              const sendPhotoResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendPhoto`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  chat_id: grupoOficialChatId,
+                  photo: fileId,
+                  caption: captionResumido,
+                  parse_mode: "HTML",
+                }),
+              });
+              const photoSent = await sendPhotoResp.json();
+
+              if (photoSent?.ok) {
+                espelhamentoSucesso = true;
+                // 2. Se houver divergências ou relatório longo, envia também a mensagem de auditoria completa
+                if (conferenciaEyemobile.diferencas.length > 0 || conferenciaEyemobile.tipoConferencia === "parcial") {
+                  await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({
+                      chat_id: grupoOficialChatId,
+                      text: relatorioCompleto,
+                      parse_mode: "HTML",
+                      reply_to_message_id: photoSent.result?.message_id,
+                    }),
+                  });
+                }
+
+                if (fechamentoFinalId) {
+                  await supabase
+                    .from("fechamentos_caixa")
+                    .update({
+                      espelhado_em: new Date().toISOString(),
+                      espelhado_message_id: photoSent.result?.message_id,
+                      status_espelhamento: "sucesso",
+                    })
+                    .eq("id", fechamentoFinalId);
+                }
+              } else {
+                console.warn("[telegram-webhook] Falha no sendPhoto do espelhamento:", photoSent);
+                if (fechamentoFinalId) {
+                  await supabase
+                    .from("fechamentos_caixa")
+                    .update({
+                      status_espelhamento: "falha",
+                      erro_espelhamento: photoSent?.description || "Falha na API Telegram",
+                    })
+                    .eq("id", fechamentoFinalId);
+                }
+              }
+            } else {
+              // Envio apenas textual (relatório completo até 4096 caracteres)
+              const sendMsgResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                  chat_id: grupoOficialChatId,
+                  text: relatorioCompleto,
+                  parse_mode: "HTML",
+                }),
+              });
+              const msgSent = await sendMsgResp.json();
+              if (msgSent?.ok) {
+                espelhamentoSucesso = true;
+                if (fechamentoFinalId) {
+                  await supabase
+                    .from("fechamentos_caixa")
+                    .update({
+                      espelhado_em: new Date().toISOString(),
+                      espelhado_message_id: msgSent.result?.message_id,
+                      status_espelhamento: "sucesso",
+                    })
+                    .eq("id", fechamentoFinalId);
+                }
+              } else {
+                console.warn("[telegram-webhook] Falha no sendMessage do espelhamento:", msgSent);
+                if (fechamentoFinalId) {
+                  await supabase
+                    .from("fechamentos_caixa")
+                    .update({
+                      status_espelhamento: "falha",
+                      erro_espelhamento: msgSent?.description || "Falha na API Telegram",
+                    })
+                    .eq("id", fechamentoFinalId);
+                }
+              }
             }
-          } else {
-            const sendMsgResp = await fetch(`https://api.telegram.org/bot${telegramBotToken}/sendMessage`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({
-                chat_id: grupoOficialChatId,
-                text: msgOficial,
-                parse_mode: "HTML",
-              }),
-            });
-            const msgSent = await sendMsgResp.json();
-            if (msgSent?.ok && fechamentoFinalId) {
+          } catch (espErr) {
+            console.error("[telegram-webhook] Erro de rede ao espelhar fechamento:", espErr);
+            if (fechamentoFinalId) {
               await supabase
                 .from("fechamentos_caixa")
                 .update({
-                  espelhado_em: new Date().toISOString(),
-                  espelhado_message_id: msgSent.result?.message_id,
+                  status_espelhamento: "falha",
+                  erro_espelhamento: String(espErr),
                 })
                 .eq("id", fechamentoFinalId);
             }
           }
         }
 
-        // Resposta segura no grupo Folguistas (Gate 9, Sigilo Financeiro)
+        // Resposta segura no grupo Folguistas (Gate 7, Gate 11, Sigilo Financeiro)
         const msgFolguista = buildFolguistaConfirmationMessage({
           nomeColaborador: colabNome,
-          dataFechamento: hojeDate.split("-").reverse().join("/"),
+          dataFechamento: formatDateBR(hojeDate),
           turno,
-          totalFotos: anexosFinais.length,
+          totalFotos: consolidado.anexosProcessados.filter((a) => !a.is_duplicata).length,
+          identidadePendente,
+          espelhamentoSucesso,
         });
 
         await sendReply(msgFolguista);

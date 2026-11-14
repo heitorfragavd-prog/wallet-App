@@ -92,7 +92,7 @@ describe("Etapa 3D — Fechamentos Integrados dos Folguistas (Gates 1 ao 13)", (
       expect(res.escala?.turno).toBe("noite");
     });
 
-    it("identifica por nome SOMENTE se o colaborador tiver escala confirmada no dia", () => {
+    it("mantém identidade pendente e sugere candidato quando remetente não tem Telegram previamente vinculado", () => {
       const res = resolveColaboradorSeguro({
         telegramUserId: null,
         telegramUsername: null,
@@ -101,8 +101,10 @@ describe("Etapa 3D — Fechamentos Integrados dos Folguistas (Gates 1 ao 13)", (
         escalasHoje: mockEscalasHoje,
       });
 
-      expect(res.colaborador?.id).toBe("colab-1");
-      expect(res.modo).toBe("nome_e_escala");
+      expect(res.colaborador).toBeNull();
+      expect(res.identidadePendente).toBe(true);
+      expect(res.modo).toBe("pendente");
+      expect(res.candidatoSugerido?.id).toBe("colab-1");
       expect(res.escala).not.toBeNull();
     });
 
