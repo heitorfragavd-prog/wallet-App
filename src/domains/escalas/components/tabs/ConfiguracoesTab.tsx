@@ -210,13 +210,28 @@ export const ConfiguracoesTab: React.FC<ConfiguracoesTabProps> = ({
               <select
                 id="canal-preferencial"
                 value={canalPreferencial}
-                onChange={(e) => setCanalPreferencial(e.target.value as any)}
+                onChange={(e) => setCanalPreferencial(e.target.value as "telegram" | "whatsapp_manual" | "web")}
                 className="w-full h-9 rounded-md border border-input bg-background px-3 py-1 text-xs shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
               >
                 <option value="telegram">Telegram (Bot Oficial Wallet)</option>
                 <option value="whatsapp_manual">WhatsApp (Operação Assistida / Manual)</option>
                 <option value="web">Painel Web (Central de Conversas)</option>
               </select>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="limite-tentativas" className="text-xs">
+                Limite de Tentativas de Reenvio
+              </Label>
+              <Input
+                id="limite-tentativas"
+                type="number"
+                min={1}
+                max={10}
+                value={limiteTentativas}
+                onChange={(e) => setLimiteTentativas(Number(e.target.value))}
+                className="h-9 text-xs font-mono"
+              />
             </div>
           </CardContent>
         </Card>

@@ -2,7 +2,7 @@
 import { describe, it, expect } from "vitest";
 import { getNextWeekendDates, isMondayInSaoPaulo, isFridayInSaoPaulo } from "../../src/domains/escalas/services/escalaDateUtils";
 import { EscalaAutomacaoEngine } from "../../src/domains/escalas/services/escalaAutomacaoEngine";
-import type { ColaboradorFolguista, EscalaSlot, EscalasConfig } from "../../src/domains/escalas/types";
+import type { ColaboradorFolguista, EscalaSlot } from "../../src/domains/escalas/types";
 import { buildGroupSystemPrompt } from "../../supabase/functions/_shared/ai/group-governance";
 
 describe("🚀 WALLET APP — ETAPA 3C: Automações Semanais dos Folguistas", () => {

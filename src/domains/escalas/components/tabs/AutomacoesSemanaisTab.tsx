@@ -17,11 +17,8 @@ import {
   Send,
   RotateCcw,
   UserCheck,
-  UserX,
   History,
-  ShieldCheck,
   Info,
-  ChevronRight,
   MessageSquare,
   Search,
 } from "lucide-react";
@@ -29,7 +26,6 @@ import { Button } from "@/shared/components/ui/button";
 import { Badge } from "@/shared/components/ui/badge";
 import { Input } from "@/shared/components/ui/input";
 import { Label } from "@/shared/components/ui/label";
-import { Textarea } from "@/shared/components/ui/textarea";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/shared/components/ui/card";
 import {
   Dialog,

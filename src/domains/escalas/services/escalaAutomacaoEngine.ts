@@ -11,7 +11,6 @@ import {
   ColaboradorFolguista,
   DisponibilidadeFolguista,
   EscalasConfig,
-  EscalaAutomacaoLog,
   EscalaSlot,
   FolguistaSubstitutionCandidate,
   TurnoId,
@@ -19,7 +18,6 @@ import {
 } from "../types";
 import { getNextWeekendDates, formatDateBR } from "./escalaDateUtils";
 import {
-  validateInterjornada,
   validateFridayToSaturdayMorning,
   validateSuellenSundayNight,
 } from "./escalaEngine";
@@ -476,7 +474,6 @@ Pode confirmar sua presença?`;
         (f.tipo === "folguista" || (f.cargo && f.cargo.toLowerCase().includes("folguist")))
     );
 
-    const isSabadoManha = turno === "manha" && data.endsWith("-06") || true; // ou checado por dow
     const isDomingoNoite = turno === "noite";
 
     for (const folguista of pool) {
