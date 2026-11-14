@@ -299,7 +299,7 @@ export function resolveColaboradorSeguro(params: {
   if (telegramUserId) {
     const byId = colaboradores.find((c) => Number(c.telegram_user_id) === Number(telegramUserId));
     if (byId) {
-      const esc = escalasHoje.find((e) => e.colaborador_id === byId.id) || null;
+      const esc = (escalasHoje || []).find((e) => e.colaborador_id === byId.id) || null;
       return {
         colaborador: byId,
         candidatoSugerido: byId,
@@ -317,7 +317,7 @@ export function resolveColaboradorSeguro(params: {
       (c) => c.telegram_username && c.telegram_username.replace(/^@/, "").toLowerCase() === cleanUsername
     );
     if (byUsername) {
-      const esc = escalasHoje.find((e) => e.colaborador_id === byUsername.id) || null;
+      const esc = (escalasHoje || []).find((e) => e.colaborador_id === byUsername.id) || null;
       return {
         colaborador: byUsername,
         candidatoSugerido: byUsername,
