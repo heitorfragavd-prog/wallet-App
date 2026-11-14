@@ -27,10 +27,12 @@ import {
   SelectValue,
 } from "@/shared/components/ui/select";
 import { CalendarDays, TrendingUp, TrendingDown, PieChart, Clock, Plus, Trash2, MapPin } from "lucide-react";
+import { GoogleCalendarIntegrationCard } from "@/domains/agenda/components/GoogleCalendarIntegrationCard";
+import { AgendaVoiceBar } from "@/domains/agenda/components/AgendaVoiceBar";
 
 interface Compromisso {
   id: string;
-  tipo: "receita" | "despesa" | "divida" | "compromisso";
+  tipo: "receita" | "despesa" | "divida" | "compromisso" | "google_calendar";
   descricao: string;
   valor?: number;
   data: string;
@@ -45,6 +47,7 @@ const TIPO_CONFIG = {
   despesa: { label: "Despesa", cor: "bg-red-500", text: "text-red-500", icon: TrendingDown },
   divida: { label: "Dívida", cor: "bg-amber-500", text: "text-amber-500", icon: PieChart },
   compromisso: { label: "Compromisso", cor: "bg-sky-500", text: "text-sky-500", icon: Clock },
+  google_calendar: { label: "Google Calendar", cor: "bg-indigo-500", text: "text-indigo-500", icon: CalendarDays },
 };
 
 // Dívidas vêm direto do banco. As DESPESAS usam useDespesas (consolidação oficial:
@@ -110,7 +113,44 @@ const Agenda = () => {
   // Compromissos manuais (título, local, data, hora, repetir, lembrete)
   const { compromissos: compromissosManuais, loading: loadingCompromissos, createCompromisso, deleteCompromisso } = useCompromissos(mesRef);
 
-  const isLoading = loadingDividas || loadingReceitas || loadingDespesas || loadingCompromissos;
+  // Eventos sincronizados com Google Calendar (Etapa 12)
+  const { data: eventosGoogle = [], isLoading: loadingGoogle, refetch: refetchGoogle } = useQuery({
+    queryKey: ["agenda-google-calendar", { mes: mesRef, workspaceId }],
+    queryFn: async (): Promise<Compromisso[]> => {
+      if (!workspaceId) return [];
+      const startDate = `${mesStart}T00:00:00`;
+      const endDate = `${mesEnd}T23:59:59`;
+      const res = await supabase
+        .from("calendar_eventos_sincronizados")
+        .select("id, titulo, inicio, local, status")
+        .eq("workspace_id", workspaceId)
+        .eq("status", "confirmed")
+        .gte("inicio", startDate)
+        .lte("inicio", endDate);
+
+      if (res.error) {
+        console.warn("Aviso ao carregar eventos do Google Calendar:", res.error);
+        return [];
+      }
+
+      return (res.data ?? []).map((ev: { id: string; titulo?: string; inicio?: string; local?: string }): Compromisso => {
+        const dia = ev.inicio ? ev.inicio.slice(0, 10) : "";
+        const hora = ev.inicio && ev.inicio.length >= 16 ? ev.inicio.slice(11, 16) : null;
+        return {
+          id: ev.id,
+          tipo: "google_calendar",
+          descricao: ev.titulo || "Reunião Google Calendar",
+          data: dia,
+          hora,
+          local: ev.local,
+        };
+      });
+    },
+    enabled: Boolean(workspaceId),
+    staleTime: 1000 * 60 * 2,
+  });
+
+  const isLoading = loadingDividas || loadingReceitas || loadingDespesas || loadingCompromissos || loadingGoogle;
 
   const compromissos = useMemo<Compromisso[]>(() => {
     // Receita consolidada por DIA: uma única linha com o valor total
@@ -147,8 +187,8 @@ const Agenda = () => {
       local: c.local,
     }));
 
-    return [...recs, ...despList, ...dividas, ...manuais];
-  }, [receitas, despesas, dividas, compromissosManuais]);
+    return [...recs, ...despList, ...dividas, ...manuais, ...eventosGoogle];
+  }, [receitas, despesas, dividas, compromissosManuais, eventosGoogle]);
 
   const porDia = useMemo(() => {
     const map = new Map<string, Compromisso[]>();
@@ -198,14 +238,25 @@ const Agenda = () => {
           <div className="flex items-center gap-3">
             <CalendarDays className="h-7 w-7 text-primary" />
             <div>
-              <h1 className="text-2xl font-bold text-foreground">Agenda Financeira</h1>
-              <p className="text-sm text-muted-foreground">Todos os compromissos do mês em um calendário</p>
+              <h1 className="text-2xl font-bold text-foreground">Agenda Inteligente</h1>
+              <p className="text-sm text-muted-foreground">Compromissos, reuniões do Google Calendar e vencimentos financeiros</p>
             </div>
           </div>
           <Button onClick={abrirModalNovo} className="bg-sky-500 hover:bg-sky-600 text-white">
             <Plus className="h-4 w-4 mr-1" /> Novo compromisso
           </Button>
         </div>
+
+        {/* Integração Google Calendar & Assistente de Voz da Agenda (Etapa 12) */}
+        {workspaceId && (
+          <div className="space-y-3">
+            <GoogleCalendarIntegrationCard
+              workspaceId={workspaceId}
+              onSyncCompleted={() => refetchGoogle()}
+            />
+            <AgendaVoiceBar workspaceId={workspaceId} />
+          </div>
+        )}
 
         <div className="grid gap-4 lg:grid-cols-2">
           <Card>
@@ -220,12 +271,14 @@ const Agenda = () => {
                   despesa: (date) => (porDia.get(diaISO(date)) ?? []).some((c) => c.tipo === "despesa"),
                   divida: (date) => (porDia.get(diaISO(date)) ?? []).some((c) => c.tipo === "divida"),
                   compromisso: (date) => (porDia.get(diaISO(date)) ?? []).some((c) => c.tipo === "compromisso"),
+                  google_calendar: (date) => (porDia.get(diaISO(date)) ?? []).some((c) => c.tipo === "google_calendar"),
                 }}
                 modifiersClassNames={{
                   receita: "bg-emerald-500/20 font-bold",
                   despesa: "bg-red-500/20 font-bold",
                   divida: "bg-amber-500/20 font-bold",
                   compromisso: "bg-sky-500/20 font-bold",
+                  google_calendar: "bg-indigo-500/20 font-bold text-indigo-400",
                 }}
               />
             </CardContent>
@@ -285,6 +338,7 @@ const Agenda = () => {
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-red-500" /> Despesa</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-amber-500" /> Dívida</span>
                 <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-sky-500" /> Compromisso</span>
+                <span className="flex items-center gap-1"><span className="w-2 h-2 rounded-full bg-indigo-500" /> Google Calendar</span>
               </div>
             </CardContent>
           </Card>
