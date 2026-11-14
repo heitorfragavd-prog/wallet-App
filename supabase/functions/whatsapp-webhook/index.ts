@@ -12,6 +12,11 @@ import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.4";
 import { getSupabaseSecretKey } from "../_shared/supabase-keys.ts";
 import { verifyMetaSignature, calculateIdempotencyHash } from "../_shared/whatsapp-security.ts";
+import {
+  processWhatsAppIncomingMessage,
+  sendMetaWhatsAppMessage,
+  type WhatsAppIncomingMessage,
+} from "../_shared/ai/whatsapp-channel-adapter.ts";
 
 export const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
@@ -93,6 +98,11 @@ serve(async (req: Request) => {
       auth: { persistSession: false, autoRefreshToken: false },
     });
 
+    const metaAccessToken =
+      Deno.env.get("META_ACCESS_TOKEN") ||
+      Deno.env.get("WHATSAPP_ACCESS_TOKEN") ||
+      "";
+
     try {
       // Processamento das entradas da Meta Cloud API
       const entries = Array.isArray(payload.entry) ? payload.entry : [];
@@ -156,27 +166,52 @@ serve(async (req: Request) => {
               idempotency_hash: idempotencyHash,
             });
 
-            // Verificação de Pareamento Seguro (Fail-Closed)
-            const { data: pairedUser } = await supabaseAdmin
-              .from("whatsapp_usuarios_pareados")
-              .select("user_id, role_no_workspace, ativo")
-              .eq("phone_number", fromPhone)
-              .eq("ativo", true)
-              .maybeSingle();
+            const sendMessageFn = async (to: string, text: string) => {
+              if (phoneNumberId && metaAccessToken) {
+                return await sendMetaWhatsAppMessage(phoneNumberId, metaAccessToken, to, text);
+              }
+              console.log(`[whatsapp-webhook] Resposta simulada para ${to}: ${text.slice(0, 80)}...`);
+              return { success: true, messageId: `mock_${Date.now()}` };
+            };
 
-            if (!pairedUser) {
-              console.warn(`[whatsapp-webhook] Número ${fromPhone} não pareado. Mensagem ignorada por segurança.`);
-              await supabaseAdmin
-                .from("whatsapp_mensagens_processadas")
-                .update({ status_processamento: "ignored", erro: "Numero nao pareado" })
-                .eq("whatsapp_message_id", messageId);
-              continue;
-            }
+            const incomingMessage: WhatsAppIncomingMessage = {
+              id: messageId,
+              from: fromPhone,
+              timestamp: String(msg.timestamp || Date.now()),
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              type: msgType as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              text: msg.text as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              document: msg.document as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              image: msg.image as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              audio: msg.audio as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              voice: msg.voice as any,
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              caption: String((msg.document as any)?.caption || (msg.image as any)?.caption || ""),
+            };
 
-            // Marca como processada
+            const processResult = await processWhatsAppIncomingMessage(
+              {
+                supabaseClient: supabaseAdmin,
+                metaAccessToken,
+                phoneNumberId,
+                sendMessage: sendMessageFn,
+              },
+              incomingMessage,
+              effectiveWorkspaceId !== "00000000-0000-0000-0000-000000000000" ? effectiveWorkspaceId : undefined,
+            );
+
+            // Atualiza status do processamento
             await supabaseAdmin
               .from("whatsapp_mensagens_processadas")
-              .update({ status_processamento: "processed" })
+              .update({
+                status_processamento: processResult.status === "success" ? "processed" : "ignored",
+                erro: processResult.reason || null,
+              })
               .eq("whatsapp_message_id", messageId);
 
             processedCount++;
