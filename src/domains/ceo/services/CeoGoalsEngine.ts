@@ -38,12 +38,26 @@ export interface PreviousPeriodDates {
 /**
  * Converte uma data no formato 'YYYY-MM-DD' para objeto Date no meio-dia UTC,
  * garantindo consistência aritmética sem sofrer desvios de timezone local.
+ * Tolerante a valores nulos, vazios ou ISO strings com timestamp.
  */
-export function parseDateToNoonUtc(dateStr: string): Date {
-  const parts = dateStr.split('-');
+export function parseDateToNoonUtc(dateStr?: string | null): Date {
+  if (!dateStr || typeof dateStr !== 'string') {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0));
+  }
+  const cleanStr = dateStr.includes('T') ? dateStr.split('T')[0] : dateStr.trim();
+  const parts = cleanStr.split('-');
+  if (parts.length < 3) {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0));
+  }
   const year = parseInt(parts[0], 10);
   const month = parseInt(parts[1], 10);
   const day = parseInt(parts[2], 10);
+  if (isNaN(year) || isNaN(month) || isNaN(day)) {
+    const now = new Date();
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), 12, 0, 0));
+  }
   return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
 }
 
@@ -69,13 +83,16 @@ export function getPreviousPeriodDates(
     };
   }
 
-  // Mensal: cálculo do mês anterior
-  const [anoStr, mesStr, diaInicioStr] = data_inicio.split('-');
-  const [, , diaFimStr] = data_fim.split('-');
-  const ano = parseInt(anoStr, 10);
-  const mes = parseInt(mesStr, 10);
-  const diaInicio = parseInt(diaInicioStr, 10);
-  const diaFim = parseInt(diaFimStr, 10);
+  // Mensal: cálculo do mês anterior seguro
+  const cleanInicio = (data_inicio || '').includes('T') ? (data_inicio || '').split('T')[0] : (data_inicio || '');
+  const cleanFim = (data_fim || '').includes('T') ? (data_fim || '').split('T')[0] : (data_fim || '');
+  const partsInicio = cleanInicio.split('-');
+  const partsFim = cleanFim.split('-');
+
+  const ano = parseInt(partsInicio[0] || '2026', 10);
+  const mes = parseInt(partsInicio[1] || '1', 10);
+  const diaInicio = parseInt(partsInicio[2] || '1', 10);
+  const diaFim = parseInt(partsFim[2] || '30', 10);
 
   const mesAnt = mes === 1 ? 12 : mes - 1;
   const anoAnt = mes === 1 ? ano - 1 : ano;
@@ -224,12 +241,14 @@ export function calculateGoalPacing(params: CalculateGoalPacingParams): Business
     dayOfWeekWeights = null,
   } = params;
 
-  const valorAlvo = Math.max(0, Number(goal.valor_alvo || 0));
-  const valorRealizado = Math.max(0, Number(currentValue !== undefined ? currentValue : goal.valor_realizado || 0));
+  const rawAlvo = Number(goal?.valor_alvo || 0);
+  const valorAlvo = Number.isFinite(rawAlvo) ? Math.max(0, rawAlvo) : 0;
+  const rawRealizado = Number(currentValue !== undefined ? currentValue : goal?.valor_realizado || 0);
+  const valorRealizado = Number.isFinite(rawRealizado) ? Math.max(0, rawRealizado) : 0;
 
   // Datas e Meio-Dia UTC para cálculo sem desvio
-  const noonInicio = parseDateToNoonUtc(goal.data_inicio);
-  const noonFim = parseDateToNoonUtc(goal.data_fim);
+  const noonInicio = parseDateToNoonUtc(goal?.data_inicio);
+  const noonFim = parseDateToNoonUtc(goal?.data_fim);
 
   const hojeParts = getSaoPauloParts(referenceDate);
   const noonHoje = parseDateToNoonUtc(hojeParts.dateString);
@@ -260,7 +279,8 @@ export function calculateGoalPacing(params: CalculateGoalPacingParams): Business
   const diasRestantes = Math.max(0, diasTotais - diasDecorridos);
 
   // Percentual atingido e restante
-  const percentualAtingido = valorAlvo > 0 ? Number(((valorRealizado / valorAlvo) * 100).toFixed(2)) : 0;
+  const rawPct = valorAlvo > 0 ? (valorRealizado / valorAlvo) * 100 : 0;
+  const percentualAtingido = Number.isFinite(rawPct) ? Number(rawPct.toFixed(2)) : 0;
   const valorRestante = Number(Math.max(0, valorAlvo - valorRealizado).toFixed(2));
 
   // Médias diárias
@@ -277,7 +297,8 @@ export function calculateGoalPacing(params: CalculateGoalPacingParams): Business
   if (isPeriodoFechado || diasRestantes === 0) {
     projecaoLinear = valorRealizado;
   } else if (diasDecorridos > 0) {
-    projecaoLinear = Number((mediaDiariaAtual * diasTotais).toFixed(2));
+    const rawLinear = mediaDiariaAtual * diasTotais;
+    projecaoLinear = Number.isFinite(rawLinear) ? Number(rawLinear.toFixed(2)) : valorRealizado;
   }
 
   // Projeção Ajustada por Dias da Semana
@@ -297,14 +318,16 @@ export function calculateGoalPacing(params: CalculateGoalPacingParams): Business
   let comparativo: BusinessGoalCalculationResult['comparativo_periodo_anterior'] = null;
   if (previousPeriodValue !== null && previousPeriodValue !== undefined) {
     const prevVal = Number(previousPeriodValue);
-    const deltaPercent = prevVal > 0
-      ? Number((((valorRealizado - prevVal) / prevVal) * 100).toFixed(2))
-      : null;
+    if (Number.isFinite(prevVal)) {
+      const deltaPercent = prevVal > 0
+        ? Number((((valorRealizado - prevVal) / prevVal) * 100).toFixed(2))
+        : null;
 
-    comparativo = {
-      valor_realizado_anterior: prevVal,
-      delta_percent: deltaPercent,
-    };
+      comparativo = {
+        valor_realizado_anterior: prevVal,
+        delta_percent: deltaPercent !== null && Number.isFinite(deltaPercent) ? deltaPercent : null,
+      };
+    }
   }
 
   return {
@@ -357,13 +380,15 @@ export interface MetricCalculationInput {
 export function computeRealizedValueFromRecords(input: MetricCalculationInput): number {
   const {
     indicador,
-    sales,
+    sales = [],
     expenses = [],
     categoriaOuProduto,
     eyemobileProductId,
-  } = input;
+  } = input || ({} as MetricCalculationInput);
 
-  const validSales = sales.filter((s) => !s.cancelado);
+  const safeSales = Array.isArray(sales) ? sales : [];
+  const safeExpenses = Array.isArray(expenses) ? expenses : [];
+  const validSales = safeSales.filter((s) => s && !s.cancelado);
 
   switch (indicador) {
     case 'faturamento': {
@@ -382,14 +407,14 @@ export function computeRealizedValueFromRecords(input: MetricCalculationInput): 
     }
 
     case 'despesas': {
-      const validExpenses = expenses.filter((e) => !e.cancelado);
+      const validExpenses = safeExpenses.filter((e) => e && !e.cancelado);
       const total = validExpenses.reduce((acc, e) => acc + (Number(e.valor) || 0), 0);
       return Number(total.toFixed(2));
     }
 
     case 'resultado_operacional': {
       const totalFaturamento = validSales.reduce((acc, s) => acc + (Number(s.valor_total) || 0), 0);
-      const validExpenses = expenses.filter((e) => !e.cancelado);
+      const validExpenses = safeExpenses.filter((e) => e && !e.cancelado);
       const totalDespesas = validExpenses.reduce((acc, e) => acc + (Number(e.valor) || 0), 0);
       return Number((totalFaturamento - totalDespesas).toFixed(2));
     }
