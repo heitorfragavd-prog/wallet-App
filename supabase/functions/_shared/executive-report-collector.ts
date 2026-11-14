@@ -314,6 +314,51 @@ export async function collectExecutiveReportIndicators(
     }
   });
 
+  // 2.1 DOCUMENTOS GMAIL (ETAPA 11 - GATES 7 E 9)
+  let documentosGmailPendentesQuantidade = 0;
+  let documentosGmailProcessados24h = 0;
+  let boletosGmailIdentificados24h = 0;
+  let nfeGmailExtraidas24h = 0;
+
+  try {
+    const { data: gmailProposals } = await supabaseAdmin
+      .from("wallet_ai_action_proposals")
+      .select("id, action_type, status, created_at, payload")
+      .eq("workspace_id", workspaceId)
+      .eq("status", "prepared");
+
+    if (gmailProposals && Array.isArray(gmailProposals)) {
+      const gmailOnly = gmailProposals.filter(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (p: any) => p.payload?.source === "gmail" || p.payload?.origem === "gmail"
+      );
+      documentosGmailPendentesQuantidade = gmailOnly.length;
+    }
+
+    const inicioRefDate = `${referenceDate}T00:00:00.000Z`;
+    const fimRefDate = `${referenceDate}T23:59:59.999Z`;
+
+    const { data: gmailMsgs } = await supabaseAdmin
+      .from("gmail_mensagens_processadas")
+      .select("id, tipo_documento_detectado, status, created_at")
+      .eq("workspace_id", workspaceId)
+      .gte("created_at", inicioRefDate)
+      .lte("created_at", fimRefDate);
+
+    if (gmailMsgs && Array.isArray(gmailMsgs)) {
+      sourcesConsulted.push("gmail_mensagens_processadas");
+      documentosGmailProcessados24h = gmailMsgs.length;
+      boletosGmailIdentificados24h = gmailMsgs.filter(
+        (m: { tipo_documento_detectado?: string }) => m.tipo_documento_detectado === "boleto"
+      ).length;
+      nfeGmailExtraidas24h = gmailMsgs.filter(
+        (m: { tipo_documento_detectado?: string }) => m.tipo_documento_detectado === "nfe"
+      ).length;
+    }
+  } catch (gmailErr) {
+    console.warn("Aviso ao coletar indicadores Gmail:", gmailErr);
+  }
+
   const despesas: DespesasIndicators = {
     despesasOntem,
     despesasMesAcumulado,
@@ -329,6 +374,10 @@ export async function collectExecutiveReportIndicators(
       possiveisDuplicidadesQuantidade > 0
         ? `${possiveisDuplicidadesQuantidade} possível(is) duplicidade(s) detectada(s) totalizando R$ ${possiveisDuplicidadesValor.toFixed(2)}.`
         : null,
+    documentosGmailPendentesQuantidade,
+    documentosGmailProcessados24h,
+    boletosGmailIdentificados24h,
+    nfeGmailExtraidas24h,
   };
 
   // 3. RESULTADO OPERACIONAL
@@ -502,6 +551,9 @@ export async function collectExecutiveReportIndicators(
       ...(atrasados.length > 0 ? [`${atrasados.length} atividade(s) atrasada(s).`] : []),
       ...(contasVencidasQuantidade > 0
         ? [`${contasVencidasQuantidade} conta(s) vencida(s) no valor de R$ ${contasVencidasValor.toFixed(2)}.`]
+        : []),
+      ...(documentosGmailPendentesQuantidade > 0
+        ? [`${documentosGmailPendentesQuantidade} documento(s) fiscal(is)/boleto(s) recebidos via Gmail aguardando conferência humana.`]
         : []),
     ],
   };
