@@ -736,7 +736,7 @@ export function useCentralConversas() {
           const { data: fechData } = await supabase
             .from("fechamentos_caixa")
             .select(
-              "id, workspace_id, grupo_id, conversation_id, data_fechamento, colaborador_id, turno, chave_operacional, caixa1, caixa2, total, envelope_total, eyemobile_total, sobra, status, anexo_path, anexos, observacao, divergencias, espelhado_em, created_at, colaboradores(id, nome)",
+              "id, workspace_id, grupo_id, conversation_id, data_fechamento, colaborador_id, turno, chave_operacional, caixa1, caixa2, total, envelope_total, eyemobile_total, sobra, status, anexo_path, anexos, observacao, divergencias, espelhado_em, identidade_pendente, status_espelhamento, tipo_conferencia, created_at, colaboradores(id, nome)",
             )
             .eq("workspace_id", workspaceId)
             .order("created_at", { ascending: false })

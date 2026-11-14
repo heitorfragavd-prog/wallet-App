@@ -196,6 +196,9 @@ export interface FechamentoCaixaItem {
   divergencias?: string[] | null;
   espelhado_em?: string | null;
   espelhado_message_id?: number | null;
+  identidade_pendente?: boolean | null;
+  status_espelhamento?: string | null;
+  tipo_conferencia?: string | null;
   observacao: string | null;
   created_at: string | null;
 }
