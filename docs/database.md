@@ -451,6 +451,8 @@
 | .worktrees\equipe-rescisao-transporte\tests\supabase-equipe\supabase\migrations\20260817000000_legacy_equipe_baseline.sql |
 | scripts\apply-phase-c-enforcement.sql |
 | scripts\apply_migrations_101_102.mjs |
+| scripts\apply_migration_103.mjs |
+| scripts\apply_migration_104.mjs |
 | scripts\apply_migration_93.mjs |
 | scripts\apply_migration_94.mjs |
 | scripts\apply_migration_95.mjs |
@@ -479,6 +481,8 @@
 | supabase\migrations\100_fechamentos_anexos_atomicos.sql |
 | supabase\migrations\101_fechamentos_rpc_atomica_e_seguranca.sql |
 | supabase\migrations\102_escalas_mensais_e_horarios_cron.sql |
+| supabase\migrations\103_rpc_financeira_seguranca_estrita.sql |
+| supabase\migrations\104_fechamentos_consolidacao_atomica.sql |
 | supabase\migrations\11.fix_telefone_cadastro.sql |
 | supabase\migrations\12.ia.sql |
 | supabase\migrations\13.fix_ia_analysis_results.sql |
