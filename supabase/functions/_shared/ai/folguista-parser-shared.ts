@@ -49,6 +49,74 @@ export function getNextWeekendDatesSaoPaulo(referenceDate = new Date()): Weekend
   };
 }
 
+export const HORARIOS_OFICIAIS_RODO_POINT = {
+  sabado: {
+    manha: { inicio: "05:00", fim: "14:30", horarioFormatado: "05h00 às 14h30", descricao: "Manhã (Abertura)" },
+    noite: { inicio: "13:00", fim: "22:30", horarioFormatado: "13h00 às 22h30", descricao: "Tarde/noite (Fechamento)" },
+  },
+  domingo: {
+    manha: { inicio: "05:00", fim: "14:30", horarioFormatado: "05h00 às 14h30", descricao: "Manhã (Abertura)" },
+    noite: { inicio: "13:00", fim: "22:30", horarioFormatado: "13h00 às 22h30", descricao: "Tarde/noite (Fechamento)" },
+  },
+} as const;
+
+export interface VagaDescobertaDetalhe {
+  data: string; // YYYY-MM-DD
+  diaSemana: "sabado" | "domingo";
+  turno: "manha" | "noite";
+  horario: string;
+}
+
+export function buildMondayConsultationMessage(params: {
+  weekend: WeekendDatesSaoPaulo;
+  vagasDescobertas: VagaDescobertaDetalhe[];
+}): string {
+  const vagasSabado = params.vagasDescobertas.filter((v) => v.diaSemana === "sabado");
+  const vagasDomingo = params.vagasDescobertas.filter((v) => v.diaSemana === "domingo");
+
+  const linhasSabado = vagasSabado.length > 0
+    ? vagasSabado.map((v) => `📅 Sábado — ${v.horario}.`).join("\n")
+    : null;
+
+  const linhasDomingo = vagasDomingo.length > 0
+    ? vagasDomingo.map((v) => `📅 Domingo — ${v.horario}.`).join("\n")
+    : null;
+
+  const partes: string[] = [];
+  if (linhasSabado) partes.push(linhasSabado);
+  if (linhasDomingo) partes.push(linhasDomingo);
+
+  return (
+    `Bom dia, pessoal! ☀️\n\n` +
+    `Estamos organizando a escala da Rodo Point para o próximo fim de semana.\n\n` +
+    `Precisamos saber quem está disponível para:\n\n` +
+    partes.join("\n\n") +
+    `\n\nQuem puder trabalhar, pode responder aqui informando o dia e turno.\n\n` +
+    `Obrigado!`
+  );
+}
+
+export function buildFridayConfirmationMessage(params: {
+  colaboradorNome: string;
+  data: string; // YYYY-MM-DD
+  dataFormatada: string;
+  diaSemana: "sabado" | "domingo";
+  turno: "manha" | "noite";
+  horario: string;
+}): string {
+  const primeiroNome = params.colaboradorNome?.trim() ? params.colaboradorNome.trim().split(" ")[0] : null;
+  const saudacao = primeiroNome ? `Oi, ${primeiroNome}! Tudo bem? 😊` : `Oi! Tudo bem? 😊`;
+  const diaNome = params.diaSemana === "sabado" ? "Sábado" : "Domingo";
+
+  return (
+    `${saudacao}\n\n` +
+    `Passando para confirmar seu turno na Rodo Point.\n\n` +
+    `📅 ${diaNome}, ${params.dataFormatada}\n` +
+    `🕔 Horário: ${params.horario}\n\n` +
+    `Está tudo certo para você trabalhar?`
+  );
+}
+
 export function normalizeText(text: string): string {
   return text
     .toLowerCase()
@@ -204,7 +272,25 @@ export function parseFolguistaMessage(
     };
   }
 
-  // 4. Detecção de turnos e dias
+  // 4. Incerteza / Dúvida explícita ("talvez", "acho que", "vou ver", "depende")
+  const duvidaKeywords = ["talvez", "acho que", "nao tenho certeza", "vou ver", "depende", "quem sabe", "nao sei"];
+  const isDuvida = duvidaKeywords.some((kw) => norm.includes(kw));
+
+  if (isDuvida) {
+    return {
+      tipoMensagem: "duvida",
+      disponibilidadeGeral: "ambiguo",
+      dias: {
+        sabado: { mencionado: false, disponivel: false, turnos: [], confirmado: false, desistencia: false },
+        domingo: { mencionado: false, disponivel: false, turnos: [], confirmado: false, desistencia: false },
+      },
+      precisaClarificacao: true,
+      perguntaClarificacao: "Você consegue confirmar com certeza se poderá trabalhar no sábado ou domingo?",
+      respostaConfirmacaoAgradecimento: `Olá, ${colaboradorNome}! Como você mencionou que ainda não tem certeza, por favor nos avise assim que confirmar sua disponibilidade para que possamos organizar a escala.`,
+    };
+  }
+
+  // 5. Detecção de turnos e dias
   const sabMencionado = norm.includes("sabado") || norm.includes("sab");
   const domMencionado = norm.includes("domingo") || norm.includes("dom");
 
