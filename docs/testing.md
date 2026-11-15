@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 347.
+- Arquivos de teste: 351.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -326,6 +326,10 @@
 | tests\conversas\etapa13_gate8_gate9_whatsapp_ui_telemetry.test.tsx |
 | tests\conversas\etapa3d1_integridade_fechamentos.test.ts |
 | tests\conversas\etapa3d_fechamentos_integrados_folguistas.test.ts |
+| tests\conversas\etapa3e1_automacoes_semanais_reais.test.ts |
+| tests\conversas\etapa3e1_escala_mensal_e_homologacao.test.ts |
+| tests\conversas\etapa3e1_rpc_e_concorrencia_anexos.test.ts |
+| tests\conversas\etapa3e1_seguranca_edge_functions.test.ts |
 | tests\conversas\etapa3e_automacoes_e_escalas.test.ts |
 | tests\conversas\etapa3e_concorrencia_anexos.test.ts |
 | tests\conversas\etapa3e_homologacao_ponta_a_ponta.test.ts |
