@@ -83,6 +83,50 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
     void loadData();
   }, [loadData]);
 
+  // Processa retorno OAuth do Gmail se houver 'code' e 'state' na URL
+  useEffect(() => {
+    if (!workspaceId) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+
+    if (code && state) {
+      let isGmailFlow = false;
+      try {
+        const decoded = JSON.parse(atob(state));
+        if (decoded.workspaceId === workspaceId && !decoded.scope?.includes('calendar')) {
+          isGmailFlow = true;
+        }
+      } catch {
+        isGmailFlow = true;
+      }
+
+      if (isGmailFlow) {
+        const redirectUri = `${window.location.origin}${window.location.pathname}`;
+        window.history.replaceState({}, '', window.location.pathname);
+
+        void (async () => {
+          setConnecting(true);
+          const res = await GmailIntegrationService.handleOAuthCallback(code, state, redirectUri);
+          setConnecting(false);
+          if (res.success) {
+            toast({
+              title: 'Gmail conectado com sucesso!',
+              description: 'Conta rodopointcafe@gmail.com vinculada com permissões de somente leitura.',
+            });
+            await loadData();
+          } else {
+            toast({
+              title: 'Falha na autorização do Gmail',
+              description: res.error || 'Não foi possível concluir o vínculo da conta.',
+              variant: 'destructive',
+            });
+          }
+        })();
+      }
+    }
+  }, [workspaceId, loadData, toast]);
+
   // Ação: Sincronizar Agora
   const handleSyncNow = async () => {
     if (!workspaceId || syncing) return;
@@ -118,7 +162,8 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
     if (!workspaceId || connecting) return;
     setConnecting(true);
     try {
-      const auth = await GmailIntegrationService.getAuthUrl(workspaceId);
+      const redirectUri = `${window.location.origin}${window.location.pathname}`;
+      const auth = await GmailIntegrationService.getAuthUrl(workspaceId, redirectUri);
       if (auth?.authUrl) {
         window.location.href = auth.authUrl;
       } else {
