@@ -5087,11 +5087,34 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
             : "pendente_conferencia";
 
         if (fechamentoFinalId) {
+          // Gate 6: Elimina lost updates concorrentes.
+          // Busca o estado mais recente de anexos do banco caso outro webhook tenha gravado em paralelo
+          const { data: fechAtual } = await supabase
+            .from("fechamentos_caixa")
+            .select("anexos, telegram_message_ids")
+            .eq("id", fechamentoFinalId)
+            .maybeSingle();
+
+          const anexosBanco = Array.isArray(fechAtual?.anexos) ? fechAtual.anexos : [];
+          const msgsBanco = Array.isArray(fechAtual?.telegram_message_ids) ? fechAtual.telegram_message_ids : [];
+
+          // Mescla única por sha256 ou file_id garantindo nunca sobrescrever anexos concorrentes
+          const mapAnexos = new Map<string, unknown>();
+          for (const item of [...anexosBanco, ...todosAnexos, ...consolidado.anexosProcessados]) {
+            if (!item) continue;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const anyItem = item as any;
+            const k = anyItem.sha256 || anyItem.file_id || JSON.stringify(anyItem);
+            if (!mapAnexos.has(k)) mapAnexos.set(k, anyItem);
+          }
+          const anexosFinaisPreservados = Array.from(mapAnexos.values());
+          const telegramMsgsFinais = Array.from(new Set([...msgsBanco, ...telegramMsgs]));
+
           await supabase
             .from("fechamentos_caixa")
             .update({
-              anexos: consolidado.anexosProcessados,
-              telegram_message_ids: telegramMsgs,
+              anexos: anexosFinaisPreservados,
+              telegram_message_ids: telegramMsgsFinais,
               total: valoresFinais,
               envelope_total: valoresFinais,
               eyemobile_total: eyemobileSummary,
@@ -5105,38 +5128,12 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
             })
             .eq("id", fechamentoFinalId);
         } else {
-          // Criação direta de contingência
-          const { data: newFech } = await supabase
-            .from("fechamentos_caixa")
-            .insert({
-              workspace_id: workspaceId,
-              user_id: userId,
-              chat_id: grupoOficialChatId,
-              grupo_id: grupoOficialId,
-              origem_grupo_id: grupoConfig.id,
-              origem_canal: "telegram",
-              colaborador_id: colabId,
-              escala_id: escala?.id || null,
-              turno,
-              chave_operacional: chaveOperacional,
-              data_fechamento: formatDateBR(hojeDate),
-              total: valoresFinais,
-              envelope_total: valoresFinais,
-              eyemobile_total: eyemobileSummary,
-              sobra: sobraFinal > 0 ? sobraFinal : null,
-              divergencias: conferenciaEyemobile.diferencas,
-              tipo_conferencia: conferenciaEyemobile.tipoConferencia,
-              status: statusFechamento,
-              identidade_pendente: identidadePendente,
-              status_espelhamento: "pendente",
-              anexos: consolidado.anexosProcessados,
-              anexo_path: storagePath || null,
-              telegram_message_ids: telegramMsgs,
-            })
-            .select("id")
-            .maybeSingle();
-
-          fechamentoFinalId = newFech?.id || "";
+          // Se a RPC falhou e não encontrou fechamentoFinalId, registra erro seguro sem insert concorrente inseguro (Gate 6)
+          console.error("[telegram-webhook] Falha crítica: fechamento não localizado após RPC atômica.", {
+            workspaceId,
+            chaveOperacional,
+            storagePath,
+          });
         }
 
         // Encaminhamento ao grupo oficial com proteção de limites Telegram (Gate 7)
