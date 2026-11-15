@@ -43,8 +43,11 @@ serve(async (req: Request) => {
     auth: { persistSession: false, autoRefreshToken: false },
   });
 
-  // Autenticação: verifica se é chamada autorizada por pg_cron ou JWT de admin
+  // Autenticação e Autorização Estrita (Gate 8):
+  // 1. Chamadas de sistema (pg_cron / dispatcher) autorizadas via secret header / cronCaller
   const isCron = isAuthorizedCronCaller(req);
+  let callingUserId: string | null = null;
+
   if (!isCron) {
     const authHeader = req.headers.get("Authorization") || req.headers.get("authorization");
     const token = authHeader ? authHeader.replace(/^Bearer\s+/i, "").trim() : null;
@@ -61,6 +64,7 @@ serve(async (req: Request) => {
         { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
       );
     }
+    callingUserId = userData.user.id;
   }
 
   let payload: CronRequestPayload = {};
@@ -73,8 +77,50 @@ serve(async (req: Request) => {
   }
 
   const action = payload.action || "consulta_segunda";
-  const forcar = Boolean(payload.forcar);
+  const rawForcar = Boolean(payload.forcar);
   const targetWorkspaceId = payload.workspace_id;
+
+  // Se não for chamada de cron, exige workspace_id explícito e valida permissão de administrador (Gate 8)
+  if (!isCron) {
+    if (!targetWorkspaceId) {
+      return new Response(
+        JSON.stringify({
+          error: "Requisições manuais devem especificar obrigatoriamente o workspace_id.",
+          code: "FORBIDDEN_WORKSPACE_MISSING",
+        }),
+        { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
+    }
+
+    // Validação de papel de administrador/executivo no workspace específico (Gate 8)
+    const { data: isExec } = await supabaseAdmin.rpc("is_workspace_executive", {
+      p_workspace_id: targetWorkspaceId,
+      p_user_id: callingUserId,
+    });
+
+    if (!isExec) {
+      // Fallback seguro: verifica se é o proprietário do workspace
+      const { data: wsOwner } = await supabaseAdmin
+        .from("workspaces")
+        .select("id, user_id")
+        .eq("id", targetWorkspaceId)
+        .eq("user_id", callingUserId)
+        .maybeSingle();
+
+      if (!wsOwner) {
+        return new Response(
+          JSON.stringify({
+            error: "Acesso negado: apenas administradores autorizados deste workspace podem disparar automações de escalas.",
+            code: "FORBIDDEN_NOT_WORKSPACE_ADMIN",
+          }),
+          { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+    }
+  }
+
+  // O parâmetro 'forcar' só pode ser aceito para chamadas com autorização comprovada
+  const forcar = rawForcar;
 
   // Busca workspaces a processar
   let wsQuery = supabaseAdmin.from("workspaces").select("id, nome");
