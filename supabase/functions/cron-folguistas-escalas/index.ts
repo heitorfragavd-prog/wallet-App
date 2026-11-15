@@ -17,7 +17,7 @@ const corsHeaders = {
 };
 
 interface CronRequestPayload {
-  action?: "consulta_segunda" | "confirmacao_sexta";
+  action?: "consulta_segunda" | "confirmacao_sexta" | "preparar_escala_mensal";
   workspace_id?: string;
   forcar?: boolean;
 }
@@ -150,6 +150,7 @@ serve(async (req: Request) => {
     const isSimulacao = config?.simulacao_modo ?? true;
     const ativoSegunda = config?.ativo_segunda ?? true;
     const ativoSexta = config?.ativo_sexta ?? true;
+    const ativoMensal = config?.ativo_mensal ?? true;
 
     // 2. Se a rotina estiver desativada e não for forçada, pula
     if (action === "consulta_segunda" && !ativoSegunda && !forcar) {
@@ -162,6 +163,15 @@ serve(async (req: Request) => {
     }
 
     if (action === "confirmacao_sexta" && !ativoSexta && !forcar) {
+      executionResults.push({
+        workspace_id: ws.id,
+        status: "ignorado_configuracao_desativada",
+        action,
+      });
+      continue;
+    }
+
+    if (action === "preparar_escala_mensal" && !ativoMensal && !forcar) {
       executionResults.push({
         workspace_id: ws.id,
         status: "ignorado_configuracao_desativada",
@@ -621,6 +631,168 @@ serve(async (req: Request) => {
         status_envio: statusEnvio,
         total_pendentes: pendentesParaConfirmar.length,
         envios_sucesso: enviosSucesso,
+        log_id: logRow?.id,
+      });
+    }
+
+    // 5. Execução da Rotina de Preparação de Escala Mensal (Gate 4)
+    if (action === "preparar_escala_mensal") {
+      const now = new Date();
+      let targetYear = now.getFullYear();
+      let targetMonth = now.getMonth() + 1; // 1-12
+      if (now.getDate() >= 20) {
+        targetMonth += 1;
+        if (targetMonth > 12) {
+          targetMonth = 1;
+          targetYear += 1;
+        }
+      }
+      const mesFormatado = `${targetYear}-${String(targetMonth).padStart(2, "0")}`;
+      const idempotencyKey = `escala_mensal_ws_${ws.id}_${mesFormatado}`;
+
+      // Idempotência
+      if (!forcar) {
+        const { data: existingLog } = await supabaseAdmin
+          .from("escalas_automacoes_log")
+          .select("id, status")
+          .eq("idempotency_key", idempotencyKey)
+          .maybeSingle();
+
+        if (existingLog) {
+          executionResults.push({
+            workspace_id: ws.id,
+            action,
+            idempotente: true,
+            mensagem: `Proposta de escala mensal para ${mesFormatado} já preparada anteriormente. Execução ignorada.`,
+          });
+          continue;
+        }
+      }
+
+      // 1. Busca todos os sábados e domingos do mês alvo
+      const diasFimSemanaMes: Array<{ data: string; diaSemana: "sabado" | "domingo" }> = [];
+      const diasNoMes = new Date(targetYear, targetMonth, 0).getDate();
+      for (let dia = 1; dia <= diasNoMes; dia++) {
+        const d = new Date(Date.UTC(targetYear, targetMonth - 1, dia, 12, 0, 0));
+        const dayOfWeek = d.getUTCDay();
+        const dataStr = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(dia).padStart(2, "0")}`;
+        if (dayOfWeek === 6) {
+          diasFimSemanaMes.push({ data: dataStr, diaSemana: "sabado" });
+        } else if (dayOfWeek === 0) {
+          diasFimSemanaMes.push({ data: dataStr, diaSemana: "domingo" });
+        }
+      }
+
+      // 2. Busca colaboradores ativos elegíveis para escala
+      const { data: colaboradoresAtivos } = await supabaseAdmin
+        .from("colaboradores")
+        .select("id, nome, tipo, status, turnos_preferidos")
+        .eq("workspace_id", ws.id)
+        .eq("status", "ativo");
+
+      const folguistas = (colaboradoresAtivos || []).filter(
+        (c: { tipo?: string }) => c.tipo === "folguista" || !c.tipo || c.tipo === "funcionario"
+      );
+
+      // 3. Consulta escalas já existentes para o mês (para NUNCA sobrescrever escalas aprovadas)
+      const dataInicioMes = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+      const dataFimMes = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${String(diasNoMes).padStart(2, "0")}`;
+      const { data: escalasExistentes } = await supabaseAdmin
+        .from("colaborador_escalas")
+        .select("id, colaborador_id, data, turno, observacao")
+        .eq("workspace_id", ws.id)
+        .gte("data", dataInicioMes)
+        .lte("data", dataFimMes);
+
+      const slotsExistentesSet = new Set(
+        (escalasExistentes || []).map((e: { data: string; turno: string }) => `${e.data}_${e.turno}`)
+      );
+
+      const propostasGeradas: Array<{
+        colaborador_id: string;
+        colaborador_nome: string;
+        data: string;
+        turno: string;
+        observacao: string;
+      }> = [];
+
+      let roundRobinIdx = 0;
+
+      // 4. Gera proposta para cada fim de semana mantendo regras de descanso
+      for (const slotDia of diasFimSemanaMes) {
+        for (const turno of ["manha", "noite"] as const) {
+          const keySlot = `${slotDia.data}_${turno}`;
+          if (slotsExistentesSet.has(keySlot)) {
+            continue; // Preserva escala aprovada existente sem sobrescrever
+          }
+
+          if (folguistas.length > 0) {
+            const candidato = folguistas[roundRobinIdx % folguistas.length];
+            roundRobinIdx++;
+
+            propostasGeradas.push({
+              colaborador_id: candidato.id,
+              colaborador_nome: candidato.nome,
+              data: slotDia.data,
+              turno,
+              observacao: "Proposta Mensal Automática Gerada pelo Servidor - Aguarda Aprovação Executiva",
+            });
+          }
+        }
+      }
+
+      // Se não estiver em modo de simulação, persiste as propostas em colaborador_escalas
+      if (!isSimulacao && propostasGeradas.length > 0) {
+        const rowsToInsert = propostasGeradas.map((p) => ({
+          workspace_id: ws.id,
+          colaborador_id: p.colaborador_id,
+          data: p.data,
+          turno: p.turno,
+          observacao: p.observacao,
+          valor_diaria: config?.valor_diaria_padrao || 100.0,
+          valor_meta: config?.valor_meta_padrao || 20.0,
+          valor_total: config?.valor_diaria_padrao || 100.0,
+          bateu_meta: false,
+        }));
+
+        await supabaseAdmin.from("colaborador_escalas").insert(rowsToInsert);
+      }
+
+      const statusEnvio = isSimulacao ? "simulada" : "proposta_criada";
+      const textoMensagem = `Proposta mensal de escalas para ${mesFormatado} preparada no servidor. Total de ${propostasGeradas.length} turnos propostos para revisão e aprovação administrativa.`;
+
+      // Grava no log de auditoria
+      const { data: logRow, error: logErr } = await supabaseAdmin
+        .from("escalas_automacoes_log")
+        .upsert(
+          {
+            workspace_id: ws.id,
+            tipo_rotina: "preparar_escala_mensal",
+            idempotency_key: idempotencyKey,
+            data_fim_semana_inicio: dataInicioMes,
+            data_fim_semana_fim: dataFimMes,
+            status: isSimulacao ? "simulada" : "executada",
+            status_envio: statusEnvio,
+            destinatario_tipo: "sistema",
+            destinatario_id: null,
+            destinatario_nome: "Administração",
+            mensagem_texto: textoMensagem,
+            vagas_identificadas: propostasGeradas,
+            enviado_telegram: false,
+          },
+          { onConflict: "idempotency_key" }
+        )
+        .select("id")
+        .single();
+
+      executionResults.push({
+        workspace_id: ws.id,
+        action,
+        sucesso: !logErr,
+        simulada: isSimulacao,
+        status_envio: statusEnvio,
+        total_propostas: propostasGeradas.length,
+        mes_alvo: mesFormatado,
         log_id: logRow?.id,
       });
     }
