@@ -33,6 +33,44 @@ export const GoogleCalendarIntegrationCard: React.FC<GoogleCalendarIntegrationCa
     staleTime: 1000 * 60 * 2,
   });
 
+  // Processa o retorno do Google Calendar OAuth se houver 'code' e 'state' na URL
+  React.useEffect(() => {
+    if (!workspaceId) return;
+    const params = new URLSearchParams(window.location.search);
+    const code = params.get('code');
+    const state = params.get('state');
+
+    if (code && state) {
+      let isCalendarFlow = false;
+      try {
+        const decoded = JSON.parse(atob(state));
+        if (decoded.workspaceId === workspaceId && (decoded.scope?.includes('calendar') || decoded.scope === 'calendar')) {
+          isCalendarFlow = true;
+        }
+      } catch {
+        if (window.location.pathname.includes('/agenda')) {
+          isCalendarFlow = true;
+        }
+      }
+
+      if (isCalendarFlow) {
+        const redirectUri = `${window.location.origin}/agenda`;
+        window.history.replaceState({}, '', window.location.pathname);
+
+        void (async () => {
+          const res = await CalendarIntegrationService.handleOAuthCallback(code, state, redirectUri);
+          if (res.success) {
+            queryClient.invalidateQueries({ queryKey: ['calendar-integration', workspaceId] });
+            queryClient.invalidateQueries({ queryKey: ['calendar-events', workspaceId] });
+            refetch();
+          } else {
+            setAuthError(res.error || 'Falha ao concluir autorização do Google Calendar');
+          }
+        })();
+      }
+    }
+  }, [workspaceId, queryClient, refetch]);
+
   const syncMutation = useMutation({
     mutationFn: () => CalendarIntegrationService.syncEvents(workspaceId),
     onSuccess: () => {

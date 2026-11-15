@@ -86,6 +86,55 @@ export class CalendarIntegrationService {
   }
 
   /**
+   * Processa o retorno do fluxo OAuth 2.0 (troca do authorization code pelos tokens do Google Calendar)
+   */
+  public static async handleOAuthCallback(
+    code: string,
+    state: string,
+    redirectUri?: string
+  ): Promise<{ success: boolean; error?: string }> {
+    try {
+      const session = (await supabase.auth.getSession()).data.session;
+      if (!session) {
+        throw new Error('Usuário não autenticado.');
+      }
+
+      const supabaseUrl = import.meta.env.VITE_SUPABASE_URL || '';
+      const endpoint = `${supabaseUrl}/functions/v1/calendar-sync/oauth-callback`;
+
+      const resp = await fetch(endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${session.access_token}`,
+        },
+        body: JSON.stringify({
+          code,
+          state,
+          redirectUri: redirectUri || `${window.location.origin}/agenda`,
+        }),
+      });
+
+      if (!resp.ok) {
+        const errData = await resp.json().catch(() => ({ error: 'Falha na autenticação com o Google Calendar' }));
+        return { success: false, error: errData.error || `Erro (${resp.status})` };
+      }
+
+      return { success: true };
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Falha ao processar autorização Google Calendar.';
+      return { success: false, error: msg };
+    }
+  }
+
+  /**
+   * Alias para syncNow compatível com componentes existentes
+   */
+  public static async syncEvents(workspaceId: string): Promise<CalendarSyncSummary> {
+    return CalendarIntegrationService.syncNow(workspaceId);
+  }
+
+  /**
    * Lista os calendários disponíveis na conta Google conectada
    */
   public static async listCalendars(workspaceId: string): Promise<GoogleCalendarItem[]> {
