@@ -5087,46 +5087,50 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
             : "pendente_conferencia";
 
         if (fechamentoFinalId) {
-          // Gate 6: Elimina lost updates concorrentes.
-          // Busca o estado mais recente de anexos do banco caso outro webhook tenha gravado em paralelo
-          const { data: fechAtual } = await supabase
-            .from("fechamentos_caixa")
-            .select("anexos, telegram_message_ids")
-            .eq("id", fechamentoFinalId)
-            .maybeSingle();
+          // Gate 3 (Etapa 3E.2): Consolidação atômica e eliminação definitiva de lost updates.
+          // Centraliza lock pessimista FOR UPDATE e mesclagem de anexos diretamente no PostgreSQL.
+          const { data: consolidadoRpc, error: errConsolidar } = await supabase.rpc(
+            "consolidar_fechamento_caixa_atomico",
+            {
+              p_fechamento_id: fechamentoFinalId,
+              p_workspace_id: workspaceId,
+              p_novos_anexos: consolidado.anexosProcessados,
+              p_telegram_message_ids: telegramMsgs,
+              p_total: valoresFinais,
+              p_envelope_total: valoresFinais,
+              p_eyemobile_total: eyemobileSummary,
+              p_divergencias: conferenciaEyemobile.diferencas,
+              p_tipo_conferencia: conferenciaEyemobile.tipoConferencia,
+              p_sobra: sobraFinal > 0 ? sobraFinal : null,
+              p_status: statusFechamento,
+              p_identidade_pendente: Boolean(identidadePendente),
+              p_anexo_path: storagePath || null,
+            }
+          );
 
-          const anexosBanco = Array.isArray(fechAtual?.anexos) ? fechAtual.anexos : [];
-          const msgsBanco = Array.isArray(fechAtual?.telegram_message_ids) ? fechAtual.telegram_message_ids : [];
-
-          // Mescla única por sha256 ou file_id garantindo nunca sobrescrever anexos concorrentes
-          const mapAnexos = new Map<string, unknown>();
-          for (const item of [...anexosBanco, ...todosAnexos, ...consolidado.anexosProcessados]) {
-            if (!item) continue;
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            const anyItem = item as any;
-            const k = anyItem.sha256 || anyItem.file_id || JSON.stringify(anyItem);
-            if (!mapAnexos.has(k)) mapAnexos.set(k, anyItem);
+          if (errConsolidar) {
+            console.warn(
+              "[telegram-webhook] RPC consolidar_fechamento_caixa_atomico falhou, fallback defensivo:",
+              errConsolidar
+            );
+            await supabase
+              .from("fechamentos_caixa")
+              .update({
+                total: valoresFinais,
+                envelope_total: valoresFinais,
+                eyemobile_total: eyemobileSummary,
+                divergencias: conferenciaEyemobile.diferencas,
+                tipo_conferencia: conferenciaEyemobile.tipoConferencia,
+                sobra: sobraFinal > 0 ? sobraFinal : null,
+                status: statusFechamento,
+                identidade_pendente: identidadePendente,
+                anexo_path: storagePath || undefined,
+                updated_at: new Date().toISOString(),
+              })
+              .eq("id", fechamentoFinalId);
+          } else if (consolidadoRpc && Array.isArray(consolidadoRpc.anexos)) {
+            todosAnexos = consolidadoRpc.anexos;
           }
-          const anexosFinaisPreservados = Array.from(mapAnexos.values());
-          const telegramMsgsFinais = Array.from(new Set([...msgsBanco, ...telegramMsgs]));
-
-          await supabase
-            .from("fechamentos_caixa")
-            .update({
-              anexos: anexosFinaisPreservados,
-              telegram_message_ids: telegramMsgsFinais,
-              total: valoresFinais,
-              envelope_total: valoresFinais,
-              eyemobile_total: eyemobileSummary,
-              divergencias: conferenciaEyemobile.diferencas,
-              tipo_conferencia: conferenciaEyemobile.tipoConferencia,
-              sobra: sobraFinal > 0 ? sobraFinal : null,
-              status: statusFechamento,
-              identidade_pendente: identidadePendente,
-              anexo_path: storagePath || undefined,
-              updated_at: new Date().toISOString(),
-            })
-            .eq("id", fechamentoFinalId);
         } else {
           // Se a RPC falhou e não encontrou fechamentoFinalId, registra erro seguro sem insert concorrente inseguro (Gate 6)
           console.error("[telegram-webhook] Falha crítica: fechamento não localizado após RPC atômica.", {
