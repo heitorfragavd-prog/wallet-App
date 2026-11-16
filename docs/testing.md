@@ -3,7 +3,7 @@
 <!-- specsfy:documentator:start -->
 ## Resumo
 
-- Arquivos de teste: 351.
+- Arquivos de teste: 354.
 - Runner: Vitest.
 - Scripts: dev: vite; build: vite build; build:dev: vite build --mode development; typecheck: tsc --noEmit; lint: eslint .; preview: vite preview; test: vitest --run; test:watch: vitest; test:coverage: vitest --run --coverage.
 
@@ -330,6 +330,9 @@
 | tests\conversas\etapa3e1_escala_mensal_e_homologacao.test.ts |
 | tests\conversas\etapa3e1_rpc_e_concorrencia_anexos.test.ts |
 | tests\conversas\etapa3e1_seguranca_edge_functions.test.ts |
+| tests\conversas\etapa3e2_concorrencia_e_lost_updates.test.ts |
+| tests\conversas\etapa3e2_escala_descanso_e_agendamentos.test.ts |
+| tests\conversas\etapa3e2_rpc_seguranca_estrita.test.ts |
 | tests\conversas\etapa3e_automacoes_e_escalas.test.ts |
 | tests\conversas\etapa3e_concorrencia_anexos.test.ts |
 | tests\conversas\etapa3e_homologacao_ponta_a_ponta.test.ts |
