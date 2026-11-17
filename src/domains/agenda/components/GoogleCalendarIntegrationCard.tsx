@@ -100,8 +100,12 @@ export const GoogleCalendarIntegrationCard: React.FC<GoogleCalendarIntegrationCa
     try {
       const redirectUri = `${window.location.origin}/agenda`;
       const authResult = await CalendarIntegrationService.getAuthUrl(workspaceId, redirectUri);
-      if (authResult.authUrl) {
+      if (authResult?.authUrl) {
         window.location.href = authResult.authUrl;
+      } else if (authResult?.isConfigurationPending) {
+        setAuthError('Integração Google Calendar aguardando configuração do Google Cloud.');
+      } else {
+        setAuthError(authResult?.error || 'Falha ao iniciar autenticação Google.');
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : 'Falha ao iniciar autenticação Google.';
