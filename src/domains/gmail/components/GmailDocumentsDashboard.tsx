@@ -92,6 +92,20 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
     const params = new URLSearchParams(window.location.search);
     const code = params.get('code');
     const state = params.get('state');
+    const oauthError = params.get('error');
+
+    if (oauthError && state) {
+      window.history.replaceState({}, '', window.location.pathname);
+      toast({
+        title: 'Autorização não concluída',
+        description:
+          oauthError === 'access_denied'
+            ? 'O consentimento na conta Google foi cancelado ou recusado.'
+            : `Erro retornado pelo Google: ${oauthError}`,
+        variant: 'destructive',
+      });
+      return;
+    }
 
     if (code && state) {
       let isGmailFlow = false;

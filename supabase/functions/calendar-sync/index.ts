@@ -7,7 +7,7 @@ const corsHeaders = {
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
 };
 
-export const CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events";
+export const CALENDAR_EVENTS_SCOPE = "https://www.googleapis.com/auth/calendar.events https://www.googleapis.com/auth/userinfo.email";
 
 export interface GoogleCalendarItem {
   id: string;
