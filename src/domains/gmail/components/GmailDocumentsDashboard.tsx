@@ -53,6 +53,8 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
   const [messages, setMessages] = useState<GmailProcessedMessage[]>([]);
   const [copiedKey, setCopiedKey] = useState<string | null>(null);
 
+  const isConnected = integration?.status === 'conectado';
+
   // Filtros
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedType, setSelectedType] = useState<string>('all');
