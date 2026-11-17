@@ -10,7 +10,7 @@ const corsHeaders = {
 };
 
 export const TARGET_GMAIL_ACCOUNT = Deno.env.get("GMAIL_TARGET_ACCOUNT") || "rodopointcafe@gmail.com";
-export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly";
+export const GMAIL_READONLY_SCOPE = "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email";
 
 export interface GoogleTokenResponse {
   access_token: string;
@@ -21,9 +21,23 @@ export interface GoogleTokenResponse {
 }
 
 export interface GoogleUserInfo {
-  email: string;
-  verified_email: boolean;
+  email?: string;
+  verified_email?: boolean;
   name?: string;
+}
+
+export interface GmailUserProfile {
+  emailAddress?: string;
+  messagesTotal?: number;
+  threadsTotal?: number;
+  historyId?: string;
+}
+
+export interface OAuthStatePayload {
+  workspaceId: string;
+  userId: string;
+  redirectUri?: string;
+  timestamp?: number;
 }
 
 serve(async (req: Request) => {
@@ -100,7 +114,14 @@ serve(async (req: Request) => {
         );
       }
 
-      const statePayload = btoa(JSON.stringify({ workspaceId, userId, timestamp: Date.now() }));
+      const statePayload = btoa(
+        JSON.stringify({
+          workspaceId,
+          userId,
+          redirectUri,
+          timestamp: Date.now(),
+        })
+      );
       const authUrl =
         `https://accounts.google.com/o/oauth2/v2/auth?` +
         `client_id=${encodeURIComponent(clientId)}&` +
@@ -124,21 +145,57 @@ serve(async (req: Request) => {
       const { code, state, redirectUri } = body;
 
       if (!code || !state) {
-        return new Response(JSON.stringify({ error: "Parâmetros code e state são obrigatórios." }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ error: "Parâmetros code e state são obrigatórios." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
-      let parsedState: { workspaceId: string; userId: string };
+      let parsedState: OAuthStatePayload;
       try {
         parsedState = JSON.parse(atob(state));
       } catch {
-        return new Response(JSON.stringify({ error: "State inválido ou corrompido." }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        return new Response(
+          JSON.stringify({ error: "State inválido ou corrompido." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
+
+      if (!parsedState?.workspaceId || !parsedState?.userId) {
+        return new Response(
+          JSON.stringify({ error: "State incompleto ou workspace não identificado." }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Validação de RBAC: caso o usuário esteja autenticado via JWT, valida pertencimento ao workspace
+      if (userId) {
+        const { data: member } = await supabase
+          .from("workspace_members")
+          .select("role, active")
+          .eq("workspace_id", parsedState.workspaceId)
+          .eq("user_id", userId)
+          .maybeSingle();
+
+        if (!member || !member.active || !["owner", "admin"].includes(member.role)) {
+          return new Response(
+            JSON.stringify({ error: "Usuário sem permissão administrativa neste workspace." }),
+            { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+          );
+        }
+      }
+
+      if (!clientId || !clientSecret) {
+        return new Response(
+          JSON.stringify({
+            error: "Credenciais Google OAuth não configuradas no Supabase Vault.",
+          }),
+          { status: 503, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // Usa estritamente o redirect_uri consistente com o state original
+      const effectiveRedirectUri = redirectUri || parsedState.redirectUri || "https://wallet.wonderwold.com.br/dividas";
 
       // Troca o authorization code pelos tokens da Google
       const tokenResp = await fetch("https://oauth2.googleapis.com/token", {
@@ -148,49 +205,121 @@ serve(async (req: Request) => {
           code,
           client_id: clientId,
           client_secret: clientSecret,
-          redirect_uri: redirectUri || "https://wallet.wonderwold.com.br/configuracoes",
+          redirect_uri: effectiveRedirectUri,
           grant_type: "authorization_code",
         }),
       });
 
       if (!tokenResp.ok) {
-        const err = await tokenResp.text();
-        console.error("[gmail-sync] Erro ao trocar code por token:", err);
-        return new Response(JSON.stringify({ error: "Falha na autenticação com a Google.", details: err }), {
-          status: 400,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        const errJson = await tokenResp.json().catch(() => null);
+        const errCode = errJson?.error || "oauth_exchange_failed";
+        const errDesc = errJson?.error_description || "Falha na troca do código de autorização Google.";
+        console.error("[gmail-sync] Erro ao trocar code por token:", errCode, errDesc);
+
+        let userFriendlyError = "Falha na autenticação com a Google.";
+        if (errCode === "invalid_grant") {
+          userFriendlyError = "Código de autorização expirado ou já utilizado. Por favor, tente conectar novamente.";
+        } else if (errCode === "redirect_uri_mismatch") {
+          userFriendlyError = "URI de redirecionamento incompatível com as credenciais do Google Cloud.";
+        }
+
+        return new Response(
+          JSON.stringify({ error: userFriendlyError, code: errCode }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
       const tokens: GoogleTokenResponse = await tokenResp.json();
+      if (!tokens?.access_token) {
+        return new Response(
+          JSON.stringify({ error: "Resposta inválida do Google: access_token ausente." }),
+          { status: 502, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
 
-      // Identifica o e-mail conectado
-      const userinfoResp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
-        headers: { Authorization: `Bearer ${tokens.access_token}` },
-      });
-      const userInfo: GoogleUserInfo = await userinfoResp.json();
+      // Identifica o e-mail conectado com dupla verificação (Gmail API Profile + Google Userinfo)
+      let connectedEmail = "";
 
-      // GATE 2: Validação estrita da conta autorizada (rodopointcafe@gmail.com)
-      if (userInfo.email.toLowerCase() !== TARGET_GMAIL_ACCOUNT.toLowerCase()) {
-        console.warn(`[gmail-sync] E-mail não autorizado: ${userInfo.email}. Esperado: ${TARGET_GMAIL_ACCOUNT}`);
+      // 1. Tenta obter diretamente via Gmail API Profile (garantido com gmail.readonly)
+      try {
+        const gmailProfileResp = await fetch("https://gmail.googleapis.com/gmail/v1/users/me/profile", {
+          headers: { Authorization: `Bearer ${tokens.access_token}` },
+        });
+        if (gmailProfileResp.ok) {
+          const profileData: GmailUserProfile = await gmailProfileResp.json();
+          if (typeof profileData?.emailAddress === "string" && profileData.emailAddress.trim()) {
+            connectedEmail = profileData.emailAddress.trim().toLowerCase();
+          }
+        } else {
+          console.warn("[gmail-sync] Falha ao consultar /gmail/v1/users/me/profile:", gmailProfileResp.status);
+        }
+      } catch (profileErr) {
+        console.warn("[gmail-sync] Erro ao consultar perfil Gmail:", profileErr instanceof Error ? profileErr.message : String(profileErr));
+      }
+
+      // 2. Fallback para Google userinfo (caso userinfo.email tenha sido concedido)
+      if (!connectedEmail) {
+        try {
+          const userinfoResp = await fetch("https://www.googleapis.com/oauth2/v2/userinfo", {
+            headers: { Authorization: `Bearer ${tokens.access_token}` },
+          });
+          if (userinfoResp.ok) {
+            const userInfo: GoogleUserInfo = await userinfoResp.json();
+            if (typeof userInfo?.email === "string" && userInfo.email.trim()) {
+              connectedEmail = userInfo.email.trim().toLowerCase();
+            }
+          }
+        } catch (userinfoErr) {
+          console.warn("[gmail-sync] Erro ao consultar userinfo:", userinfoErr instanceof Error ? userinfoErr.message : String(userinfoErr));
+        }
+      }
+
+      if (!connectedEmail) {
         return new Response(
           JSON.stringify({
-            error: `Conta inválida (${userInfo.email}). A integração é restrita exclusivamente ao e-mail comercial ${TARGET_GMAIL_ACCOUNT}.`,
+            error: "Não foi possível identificar o endereço de e-mail da conta Google conectada.",
+          }),
+          { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
+      }
+
+      // GATE 2: Validação estrita da conta autorizada (rodopointcafe@gmail.com)
+      if (connectedEmail !== TARGET_GMAIL_ACCOUNT.toLowerCase()) {
+        console.warn(`[gmail-sync] E-mail não autorizado: ${connectedEmail}. Esperado: ${TARGET_GMAIL_ACCOUNT}`);
+        return new Response(
+          JSON.stringify({
+            error: `Conta inválida (${connectedEmail}). A integração é restrita exclusivamente ao e-mail comercial ${TARGET_GMAIL_ACCOUNT}.`,
           }),
           { status: 403, headers: { ...corsHeaders, "Content-Type": "application/json" } }
         );
       }
 
-      const expiresAt = new Date(Date.now() + tokens.expires_in * 1000).toISOString();
+      const expiresAt = new Date(Date.now() + (tokens.expires_in || 3600) * 1000).toISOString();
+
+      // Se o Google não retornar um novo refresh_token nesta troca (ex: reautorização sem revogação prévia),
+      // preservamos o refresh_token já persistido para manter acesso offline contínuo.
+      let refreshTokenToSave = tokens.refresh_token ?? null;
+      if (!refreshTokenToSave) {
+        const { data: existingInteg } = await supabase
+          .from("workspace_gmail_integrations")
+          .select("refresh_token_encrypted")
+          .eq("workspace_id", parsedState.workspaceId)
+          .eq("email_conectado", connectedEmail)
+          .maybeSingle();
+
+        if (existingInteg?.refresh_token_encrypted) {
+          refreshTokenToSave = existingInteg.refresh_token_encrypted;
+        }
+      }
 
       // Salva ou atualiza a integração no banco
       const { error: upsertErr } = await supabase.from("workspace_gmail_integrations").upsert(
         {
           workspace_id: parsedState.workspaceId,
           user_id: parsedState.userId,
-          email_conectado: userInfo.email.toLowerCase(),
+          email_conectado: connectedEmail,
           access_token_encrypted: tokens.access_token,
-          refresh_token_encrypted: tokens.refresh_token ?? null,
+          refresh_token_encrypted: refreshTokenToSave,
           token_expires_at: expiresAt,
           status: "conectado",
           updated_at: new Date().toISOString(),
@@ -199,17 +328,17 @@ serve(async (req: Request) => {
       );
 
       if (upsertErr) {
-        console.error("[gmail-sync] Erro ao persistir tokens:", upsertErr);
-        return new Response(JSON.stringify({ error: "Falha ao gravar credenciais de integração." }), {
-          status: 500,
-          headers: { ...corsHeaders, "Content-Type": "application/json" },
-        });
+        console.error("[gmail-sync] Erro ao persistir tokens:", upsertErr.message);
+        return new Response(
+          JSON.stringify({ error: "Falha ao gravar credenciais de integração no banco de dados." }),
+          { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
+        );
       }
 
       return new Response(
         JSON.stringify({
           success: true,
-          email: userInfo.email,
+          email: connectedEmail,
           status: "conectado",
           expiresAt,
         }),
