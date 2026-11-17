@@ -363,3 +363,32 @@ export function gerarMensagemConversasLoja(
 
 ⚠️ <i>Gerente: revise as quantidades antes de aprovar o pedido no Wallet CEO.</i>`;
 }
+
+/**
+ * Solicitação Matinal de Conferência de Estoque (Gate 16 - 09h00 Brasília)
+ * Enviada ao grupo oficial 'Conversas da Loja'
+ */
+export function gerarSolicitacaoMatinalEstoque(
+  fornecedoresHoje: Array<{ nome: string; itensParaContar?: string[] }>,
+  modoSimulacao: boolean = true
+): string {
+  const dataHoje = new Date().toLocaleDateString("pt-BR", { timeZone: "America/Sao_Paulo" });
+  const cabecalhoSimulacao = modoSimulacao
+    ? `🧪 <b>[MODO SIMULAÇÃO — COMPRAS AUTOMÁTICAS]</b>\n`
+    : `📦 <b>[RODO POINT — ROTINA MATINAL DE ESTOQUE]</b>\n`;
+
+  let msg = `${cabecalhoSimulacao}🏪 <b>BOM DIA EQUIPE! CONFERÊNCIA DE ESTOQUE DAS 09H00</b>\n📅 Data: ${dataHoje}\n\nHoje temos pedidos programados para os seguintes fornecedores:\n`;
+
+  for (const f of fornecedoresHoje) {
+    msg += `\n🔹 <b>${f.nome}</b>`;
+    if (f.itensParaContar && f.itensParaContar.length > 0) {
+      msg += `\n  <i>Itens a conferir: ${f.itensParaContar.join(", ")}</i>`;
+    }
+  }
+
+  msg += `\n\nPor favor, enviem aqui no grupo as quantidades físicas contadas na loja (por texto, foto da prateleira ou áudio).`;
+  msg += `\nExemplo: <i>"Coca 350ml: 5, Coca Zero: 2, Monster Tradicional: 12"</i>\n`;
+  msg += `\nO Wallet atualizará automaticamente as sugestões de compra para aprovação da diretoria.`;
+
+  return msg.trim();
+}
