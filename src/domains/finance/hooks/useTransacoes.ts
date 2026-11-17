@@ -68,6 +68,9 @@ const fetchTransacoesData = async (params: TransacoesQueryParams, workspaceId?: 
 
   const { startDate = null, endDate = null, limit = 2000 } = params;
   const CATEGORIAS_EMBED = `categorias!categoria_id (nome, cor, icone)`;
+  const TRANSACOES_FIELDS = `id, user_id, workspace_id, categoria_id, tipo, descricao, valor, data, parcela_atual, total_parcelas, parent_id, created_at, updated_at, metodo_pagamento, conta_id, observacoes, deduplication_key, ${CATEGORIAS_EMBED}`;
+  const RECEITAS_FIELDS = `id, user_id, workspace_id, categoria_id, descricao, valor, data, created_at, updated_at, metodo_pagamento, conta_id, observacoes, ${CATEGORIAS_EMBED}`;
+  const DESPESAS_FIELDS = `id, user_id, workspace_id, categoria_id, descricao, valor, data, parcela_atual, total_parcelas, parent_id, created_at, updated_at, metodo_pagamento, conta_id, observacoes, ${CATEGORIAS_EMBED}`;
 
   const applyCommon = <T extends CommonQueryFilter<T>>(query: T): T => {
     let q = query.eq("workspace_id", workspaceId);
@@ -77,9 +80,9 @@ const fetchTransacoesData = async (params: TransacoesQueryParams, workspaceId?: 
   };
 
   const [transacoesResp, receitasResp, despesasResp] = await Promise.all([
-    applyCommon(supabase.from("transacoes").select(`*, ${CATEGORIAS_EMBED}`)),
-    applyCommon(supabase.from("receitas").select(`*, ${CATEGORIAS_EMBED}`)),
-    applyCommon(supabase.from("despesas").select(`*, ${CATEGORIAS_EMBED}`)),
+    applyCommon(supabase.from("transacoes").select(TRANSACOES_FIELDS)),
+    applyCommon(supabase.from("receitas").select(RECEITAS_FIELDS)),
+    applyCommon(supabase.from("despesas").select(DESPESAS_FIELDS)),
   ]);
 
   const seenEyemobileSaleIds = new Set<string>();

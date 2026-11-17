@@ -1747,7 +1747,7 @@ async function syncUserEyemobile(
             while (batchHasMore) {
               const { data: batchExisting, error: searchErr } = await supabaseAdmin
                 .from("transacoes")
-                .select("id, metodo_pagamento, observacoes, itens, descricao, deduplication_key")
+                .select("id, metodo_pagamento, observacoes, has_itens, descricao, deduplication_key")
                 .eq("user_id", user_id)
                 .eq("workspace_id", syncWorkspaceId)
                 .eq("tipo", "receita")
@@ -1764,14 +1764,14 @@ async function syncUserEyemobile(
                   const dedupKey = es.deduplication_key;
                   if (typeof dedupKey === "string" && dedupKey.startsWith("eyemobile:")) {
                     const sid = dedupKey.replace("eyemobile:", "").trim();
-                    if (sid) existingMap.set(sid, { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
+                    if (sid) existingMap.set(sid, { id: es.id, metodo_pagamento: es.metodo_pagamento, has_itens: Boolean((es as any).has_itens) });
                   }
                   const obs = es.observacoes || "";
                   const desc = es.descricao || "";
                   const match = obs.match(/Venda:\s*#(\d+)/i) || desc.match(/#(\d+)/);
                   const sid = match ? match[1] : null;
                   if (sid) {
-                    existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento, itens: es.itens });
+                    existingMap.set(String(sid), { id: es.id, metodo_pagamento: es.metodo_pagamento, has_itens: Boolean((es as any).has_itens) });
                   }
                 }
                 batchHasMore = batchExisting.length >= BATCH_PAGE_SIZE;
@@ -1827,7 +1827,7 @@ async function syncUserEyemobile(
               // (método de pagamento e/ou itens da venda p/ o Top 10).
               const saleItens = Array.isArray(sale.transaction_items) ? sale.transaction_items : null;
               const needsMetodo = existingSales.metodo_pagamento === null && mappedMethod !== null;
-              const needsItens = existingSales.itens == null && saleItens && saleItens.length > 0;
+              const needsItens = !existingSales.has_itens && saleItens && saleItens.length > 0;
 
               if (needsMetodo || needsItens) {
                 const payPart = payTypeName ? ` | Pagamento: ${payTypeName}` : "";
@@ -1878,14 +1878,14 @@ async function syncUserEyemobile(
                 revErr.message?.includes("duplicate key")
               ) {
                 console.log(`[eyemobile-sync] Venda #${sale.id} já existente (idempotência garantida via deduplication_key).`);
-                existingMap.set(String(sale.id), { id: "existing", metodo_pagamento: mappedMethod, itens: sale.transaction_items });
+                existingMap.set(String(sale.id), { id: "existing", metodo_pagamento: mappedMethod, has_itens: true });
                 continue;
               }
               console.error("Erro ao inserir receita de venda:", revErr);
               syncErrors.push(`Erro na venda ${sale.id}: ${revErr.message}`);
               continue;
             }
-            existingMap.set(String(sale.id), { id: "inserted", metodo_pagamento: mappedMethod, itens: sale.transaction_items });
+            existingMap.set(String(sale.id), { id: "inserted", metodo_pagamento: mappedMethod, has_itens: true });
             salesCount++;
           }
 
@@ -1964,26 +1964,37 @@ async function syncUserEyemobile(
       const prodData = await prodResp.json();
 
       if (prodData.data && Array.isArray(prodData.data)) {
+        // Pré-carregamento em lote dos itens_mercado não adequados do usuário
+        // Elimina o padrão N+1 de requisições PostgREST (reduz de dezenas/centenas de HTTP requests para 1)
+        const { data: existingItensData, error: prefetchErr } = await supabaseAdmin
+          .from("itens_mercado")
+          .select("descricao")
+          .eq("user_id", user_id)
+          .neq("status", "estoque_adequado");
+
+        if (prefetchErr) {
+          console.error("Erro ao pré-carregar itens de mercado:", prefetchErr);
+        }
+
+        const existingDescriptionsSet = new Set<string>(
+          (existingItensData || [])
+            .map((i: { descricao?: string }) => (i.descricao || "").trim().toLowerCase())
+            .filter(Boolean)
+        );
+
         for (const prod of prodData.data) {
           const currentStock = Number(prod.stock || 0);
           const minStock = Number(prod.min_stock || 5);
 
           if (currentStock <= minStock) {
-            // Check if item is already in shopping list (itens_mercado) and not bought (not fully stocked)
-            const { data: existing, error: searchErr } = await supabaseAdmin
-              .from("itens_mercado")
-              .select("id")
-              .eq("user_id", user_id)
-              .eq("descricao", prod.name)
-              .neq("status", "estoque_adequado")
-              .maybeSingle();
+            const prodName = String(prod.name || "").trim();
+            const normalizedName = prodName.toLowerCase();
+            if (!normalizedName) continue;
 
-            if (searchErr) {
-              console.error("Erro ao pesquisar item de mercado existente:", searchErr);
-              continue;
-            }
+            // Verificação em memória (0 chamadas HTTP adicionais por item)
+            const alreadyExists = existingDescriptionsSet.has(normalizedName);
 
-            if (!existing) {
+            if (!alreadyExists) {
               // Add to market list
               const qtyToSuggest = Math.max(minStock * 2 - currentStock, minStock);
               const { error: insErr } = await supabaseAdmin.from("itens_mercado").insert({
@@ -2000,6 +2011,7 @@ async function syncUserEyemobile(
                 console.error("Erro ao inserir item de mercado:", insErr);
                 syncErrors.push(`Estoque ${prod.name}: ${insErr.message}`);
               } else {
+                existingDescriptionsSet.add(normalizedName);
                 stockAlerts++;
               }
             }
