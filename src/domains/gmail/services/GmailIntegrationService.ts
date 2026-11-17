@@ -50,7 +50,7 @@ export class GmailIntegrationService {
   public static async getAuthUrl(
     workspaceId: string,
     redirectUri?: string
-  ): Promise<{ authUrl: string; state: string } | null> {
+  ): Promise<{ authUrl?: string; state?: string; error?: string; isConfigurationPending?: boolean } | null> {
     try {
       const session = (await supabase.auth.getSession()).data.session;
       if (!session) {
@@ -73,15 +73,24 @@ export class GmailIntegrationService {
       });
 
       if (!resp.ok) {
-        const errText = await resp.text();
-        throw new Error(`Falha ao obter URL OAuth (${resp.status}): ${errText}`);
+        const errJson = await resp.json().catch(() => null);
+        const errMsg = errJson?.error || (await resp.text().catch(() => ''));
+        const isPending = resp.status === 503 || String(errMsg).includes('Vault') || String(errMsg).includes('GOOGLE_CLIENT_ID');
+        return {
+          error: errMsg || `Falha ao obter URL OAuth (${resp.status})`,
+          isConfigurationPending: isPending,
+        };
       }
 
       const result = await resp.json();
       return result as { authUrl: string; state: string };
     } catch (err) {
       console.error('[GmailService] Erro ao requisitar auth-url:', err);
-      return null;
+      const msg = err instanceof Error ? err.message : String(err);
+      return {
+        error: msg,
+        isConfigurationPending: false,
+      };
     }
   }
 
