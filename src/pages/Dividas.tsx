@@ -60,6 +60,7 @@ import { useTransacoes } from "@/domains/finance/hooks/useTransacoes";
 import { format } from "date-fns";
 import { useWorkspace } from "@/contexts/WorkspaceContext";
 import { GmailDocumentsDashboard } from "@/domains/gmail/components/GmailDocumentsDashboard";
+import { ErrorBoundary } from "@/shared/components/ErrorBoundary";
 import { ptBR } from "date-fns/locale";
 import { usePrivacy } from "@/contexts/PrivacyContext";
 
@@ -1583,7 +1584,9 @@ const Dividas = () => {
           </TabsContent>
 
           <TabsContent value="gmail" className="space-y-4">
-            <GmailDocumentsDashboard workspaceId={workspaceId} />
+            <ErrorBoundary context="GmailDocumentsDashboard">
+              <GmailDocumentsDashboard workspaceId={workspaceId} />
+            </ErrorBoundary>
           </TabsContent>
         </Tabs>
 
