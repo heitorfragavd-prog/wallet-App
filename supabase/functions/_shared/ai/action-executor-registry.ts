@@ -274,6 +274,186 @@ export function registerBoletoActionHandlers(registry: ActionExecutorRegistry): 
   });
 }
 
+/**
+ * Registra o manipulador de persistência para NF-e aprovada pelo usuário.
+ * 
+ * REGRAS DE SEGURANÇA E NEGÓCIO (GATE 1, 3, 4, 5):
+ * - workspace_id e user_id obtidos estritamente do contexto de execução autenticado server-side.
+ * - NF-e é cadastrada estritamente com status: 'pendente' e valor_pago: 0 (NÃO liquidada!).
+ * - Idempotência: impede duplicações checando chave de acesso ou número da nota + CNPJ.
+ * - Registra em 'notas_fiscais_compra' e 'nf_itens' para viabilizar rastreabilidade de custos.
+ * - Atualiza 'gmail_mensagens_processadas.divida_id'.
+ */
+export function registerNfeActionHandlers(registry: ActionExecutorRegistry): void {
+  registry.register("cadastrar_nfe", async (payload, context, client) => {
+    if (!context.workspaceId || !context.userId) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "workspaceId e userId são obrigatórios no contexto de execução.",
+      );
+    }
+
+    const valorTotal = Number(
+      (payload.valores as Record<string, unknown> | undefined)?.valorTotal ??
+      payload.valor_total ??
+      payload.valor ??
+      0,
+    );
+
+    if (!Number.isFinite(valorTotal) || valorTotal <= 0) {
+      throw new ActionGatewayError(
+        "WALLET_AI_ACTION_INVALID",
+        400,
+        "Valor total da NF-e deve ser maior que zero.",
+      );
+    }
+
+    const chaveAcesso = String(payload.chave_acesso || "").trim();
+    const numeroNota = String(payload.numero_nota || "").trim();
+    const emitente = (payload.emitente || {}) as Record<string, unknown>;
+    const cnpj = String(emitente.cnpj || payload.cnpj || "").replace(/\D/g, "");
+    const razaoSocial = String(emitente.razaoSocial || emitente.nomeFantasia || payload.emitente_nome || "Fornecedor").trim();
+
+    // Extrair duplicatas e vencimento
+    const duplicatas = Array.isArray(payload.duplicatas) ? payload.duplicatas : [];
+    let dataVencimento = "";
+    if (duplicatas.length > 0 && (duplicatas[0] as Record<string, unknown>).vencimento) {
+      dataVencimento = String((duplicatas[0] as Record<string, unknown>).vencimento).trim();
+    } else if (payload.data_vencimento) {
+      dataVencimento = String(payload.data_vencimento).trim();
+    } else {
+      const d = new Date();
+      d.setDate(d.getDate() + 30);
+      dataVencimento = d.toISOString().split("T")[0];
+    }
+
+    // 1. CHECAGEM DE IDEMPOTÊNCIA E DEDUPLICAÇÃO
+    const { data: dividasExistentes } = await client
+      .from("dividas")
+      .select("id, descricao, documento_favorecido, valor_total, data_vencimento, status")
+      .eq("workspace_id", context.workspaceId);
+
+    const dividaDuplicada = (dividasExistentes || []).find((d: any) => {
+      const matchChave = chaveAcesso && d.descricao && d.descricao.includes(chaveAcesso);
+      const matchNotaCnpj = numeroNota && d.descricao && d.descricao.includes(numeroNota) &&
+        d.documento_favorecido && cnpj && d.documento_favorecido.replace(/\D/g, "") === cnpj;
+      return matchChave || matchNotaCnpj;
+    });
+
+    let dividaId: string;
+
+    if (dividaDuplicada) {
+      dividaId = dividaDuplicada.id;
+    } else {
+      // Inserir nova dívida com status 'pendente'
+      const descricaoDivida = `NF-e nº ${numeroNota || "S/N"} — ${razaoSocial}${chaveAcesso ? ` (Chave: ${chaveAcesso})` : ""}`;
+      const insertRow = {
+        user_id: context.userId,
+        workspace_id: context.workspaceId,
+        descricao: descricaoDivida,
+        credor: razaoSocial,
+        documento_favorecido: cnpj || null,
+        valor_total: valorTotal,
+        valor_pago: 0,
+        valor_restante: valorTotal,
+        data_vencimento: dataVencimento,
+        status: "pendente",
+        metodo_pagamento_esperado: "boleto",
+        parcelas: duplicatas.length || 1,
+        parcelas_pagas: 0,
+        parcela_atual: 1,
+        total_parcelas: duplicatas.length || 1,
+      };
+
+      const { data: novaDivida, error: errDivida } = await client
+        .from("dividas")
+        .insert([insertRow])
+        .select("id")
+        .single();
+
+      if (errDivida || !novaDivida) {
+        throw new ActionGatewayError(
+          "WALLET_AI_ACTION_EXECUTION_ERROR",
+          500,
+          `Erro ao persistir dívida da NF-e: ${errDivida?.message ?? "Falha na inserção"}`,
+        );
+      }
+      dividaId = novaDivida.id;
+    }
+
+    // 2. ATUALIZAR MENSAGEM PROCESSADA DO GMAIL
+    if (chaveAcesso) {
+      await client
+        .from("gmail_mensagens_processadas")
+        .update({
+          divida_id: dividaId,
+          status: "processado",
+        })
+        .eq("workspace_id", context.workspaceId)
+        .contains("detalhes_extracao", { chave_acesso: chaveAcesso });
+    }
+
+    // 3. PERSISTIR NOTA FISCAL DE COMPRA E ITENS (SE DISPONÍVEL)
+    try {
+      if (chaveAcesso) {
+        const { data: nfExistente } = await client
+          .from("notas_fiscais_compra")
+          .select("id")
+          .eq("workspace_id", context.workspaceId)
+          .eq("chave_acesso", chaveAcesso)
+          .maybeSingle();
+
+        let nfCompraId = nfExistente?.id;
+        if (!nfCompraId) {
+          const valores = (payload.valores || {}) as Record<string, unknown>;
+          const { data: novaNf } = await client
+            .from("notas_fiscais_compra")
+            .insert([{
+              user_id: context.userId,
+              workspace_id: context.workspaceId,
+              numero_nf: numeroNota || null,
+              fornecedor: razaoSocial,
+              cnpj_fornecedor: cnpj || null,
+              valor_total: valorTotal,
+              valor_produtos: Number(valores.valorProdutos ?? valorTotal),
+              chave_acesso: chaveAcesso,
+              status: "aprovada",
+              origem: "gmail",
+            }])
+            .select("id")
+            .maybeSingle();
+
+          nfCompraId = novaNf?.id;
+        }
+
+        const itens = Array.isArray(payload.itens) ? payload.itens : [];
+        if (nfCompraId && itens.length > 0) {
+          const itensRows = itens.map((it: any) => ({
+            nf_id: nfCompraId,
+            codigo_produto: String(it.codigoProduto || it.codigo || ""),
+            descricao: String(it.descricao || ""),
+            ncm: String(it.ncm || ""),
+            cfop: String(it.cfop || ""),
+            unidade: String(it.unidade || "UN"),
+            quantidade: Number(it.quantidade || 1),
+            valor_unitario: Number(it.valorUnitario || 0),
+            valor_total: Number(it.valorTotal || 0),
+            custo_unitario_liquido: Number(it.valorUnitario || 0),
+            status_estoque: "pendente",
+          }));
+
+          await client.from("nf_itens").insert(itensRows);
+        }
+      }
+    } catch {
+      // Persistência secundária não bloqueia a criação da dívida
+    }
+
+    return { recordId: dividaId, data: { dividaId, jaExistia: !!dividaDuplicada } };
+  });
+}
+
 export function registerFechamentoActionHandlers(registry: ActionExecutorRegistry): void {
   registry.register("confirmar_fechamento_caixa", async (payload, context, client) => {
     const fechamentoId = String(payload.fechamento_id || "").trim();
@@ -327,6 +507,7 @@ export function registerFechamentoActionHandlers(registry: ActionExecutorRegistr
 export function createDefaultActionExecutorRegistry(options?: {
   enableUserScopedMetaExecutors?: boolean;
   disableBoletoExecutor?: boolean;
+  disableNfeExecutor?: boolean;
 }): ActionExecutorRegistry {
   const registry = new ActionExecutorRegistry();
 
@@ -336,6 +517,10 @@ export function createDefaultActionExecutorRegistry(options?: {
 
   if (!options?.disableBoletoExecutor) {
     registerBoletoActionHandlers(registry);
+  }
+
+  if (!options?.disableNfeExecutor) {
+    registerNfeActionHandlers(registry);
   }
 
   registerFechamentoActionHandlers(registry);
