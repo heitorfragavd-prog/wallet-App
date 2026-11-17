@@ -102,19 +102,34 @@ export const useFinancialContext = () => {
       const hojeIso = hoje.toISOString().split("T")[0];
       const inicioMes = new Date(hoje.getFullYear(), hoje.getMonth(), 1).toISOString().split("T")[0];
 
-      // Construir as queries base do Supabase
-      const qDividas = supabase.from("dividas").select("*").eq("workspace_id", workspaceId);
-      const qReceitas = supabase.from("receitas").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
-      const qDespesas = supabase.from("despesas").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
-      const qTransacoes = supabase.from("transacoes").select("*, categorias!categoria_id(nome)").eq("workspace_id", workspaceId);
-      const qContas = supabase.from("contas_usuario").select("*").eq("workspace_id", workspaceId);
-      const qEyemobileLogs = supabase.from("eyemobile_sync_logs").select("*").order("created_at", { ascending: false }).limit(5);
-      const qVeiculos = supabase.from("veiculos").select("*, manutencoes(*)").eq("workspace_id", workspaceId);
-      const qInvestimentos = supabase.from("investimentos").select("*").eq("workspace_id", workspaceId);
-      const qRendimentos = supabase.from("historico_rendimentos").select("*").eq("ano", hoje.getFullYear()).eq("mes", hoje.getMonth() + 1);
-      const qItensMercado = supabase.from("itens_mercado").select("*, categorias_mercado(nome)").eq("workspace_id", workspaceId);
-      const qDivipayTransacoes = supabase.from("divipay_transacoes").select("*").eq("type", "withdraw").eq("status", "pending");
-      const qMetas = supabase.from("metas").select("*");
+      // Construir as queries base do Supabase com projeção estrita de colunas e recorte temporal
+      const qDividas = supabase.from("dividas").select("id, valor_total, valor_pago, data_vencimento, status, credor").eq("workspace_id", workspaceId);
+      const qReceitas = supabase
+        .from("receitas")
+        .select("id, valor, data, descricao, observacoes, origem, categorias!categoria_id(nome)")
+        .eq("workspace_id", workspaceId)
+        .gte("data", inicioMes)
+        .lte("data", hojeIso);
+      const qDespesas = supabase
+        .from("despesas")
+        .select("id, valor, data, descricao, observacoes, categorias!categoria_id(nome)")
+        .eq("workspace_id", workspaceId)
+        .gte("data", inicioMes)
+        .lte("data", hojeIso);
+      const qTransacoes = supabase
+        .from("transacoes")
+        .select("id, valor, data, tipo, descricao, observacoes, categorias!categoria_id(nome)")
+        .eq("workspace_id", workspaceId)
+        .gte("data", inicioMes)
+        .lte("data", hojeIso);
+      const qContas = supabase.from("contas_usuario").select("id, nome, saldo_atual, saldo, tipo").eq("workspace_id", workspaceId);
+      const qEyemobileLogs = supabase.from("eyemobile_sync_logs").select("id, type, status, created_at, error_message").order("created_at", { ascending: false }).limit(5);
+      const qVeiculos = supabase.from("veiculos").select("id, placa, modelo, manutencoes(id, status)").eq("workspace_id", workspaceId);
+      const qInvestimentos = supabase.from("investimentos").select("id, valor_atual, valor_investido").eq("workspace_id", workspaceId);
+      const qRendimentos = supabase.from("historico_rendimentos").select("id, ano, mes, valor_rendimento").eq("ano", hoje.getFullYear()).eq("mes", hoje.getMonth() + 1);
+      const qItensMercado = supabase.from("itens_mercado").select("id, descricao, quantidade_estoque, quantidade_ideal, status, categorias_mercado(nome)").eq("workspace_id", workspaceId);
+      const qDivipayTransacoes = supabase.from("divipay_transacoes").select("id, amount, status, type").eq("type", "withdraw").eq("status", "pending");
+      const qMetas = supabase.from("metas").select("id, titulo, valor_alvo, valor_atual, status");
 
       const [
         { data: resDividas },
