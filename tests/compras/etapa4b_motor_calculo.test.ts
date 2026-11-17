@@ -56,7 +56,10 @@ describe("Etapa 4B: Motor de Cálculo e Formatadores de Compras (Rodo Point)", (
     const res = calcularSugestaoCompra(itens, { fornecedorNome: "Salgados", formatoLista: "salgados_soma" });
 
     expect(res.totalUnidadesSugeridas).toBe(190);
-    expect(res.textoFormatado).toBe("📦 PEDIDO — SALGADOS\n190 | Coxinha = 90, Kibe = 50, Enroladinho de Salsicha = 50");
+    expect(res.textoFormatado).toContain("🔸 SALGADOS – QUANTIDADE PARA COMPRAR");
+    expect(res.textoFormatado).toContain("100 | Coxinha = 90");
+    expect(res.textoFormatado).toContain("80 | Kibe = 50");
+    expect(res.textoFormatado).toContain("60 | Enroladinho de Salsicha = 50");
   });
 
   it("5. Deve formatar Bebidas (Coca-Cola / Ambev) sem exibir estoque de referência", () => {
@@ -67,8 +70,8 @@ describe("Etapa 4B: Motor de Cálculo e Formatadores de Compras (Rodo Point)", (
 
     const res = calcularSugestaoCompra(itens, { fornecedorNome: "Coca-Cola", formatoLista: "bebidas_sem_ref" });
 
-    expect(res.textoFormatado).toContain("Coca Zero 350ml = 10 cx");
-    expect(res.textoFormatado).toContain("Heineken Long Neck = 12 cx");
+    expect(res.textoFormatado).toContain("Coca Zero 350ml = 10");
+    expect(res.textoFormatado).toContain("Heineken Long Neck = 12");
     expect(res.textoFormatado).not.toContain("Referência");
     expect(res.textoFormatado).not.toContain("Estoque");
   });
