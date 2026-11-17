@@ -5128,8 +5128,16 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
                 updated_at: new Date().toISOString(),
               })
               .eq("id", fechamentoFinalId);
-          } else if (consolidadoRpc && Array.isArray(consolidadoRpc.anexos)) {
-            todosAnexos = consolidadoRpc.anexos;
+          } else if (consolidadoRpc) {
+            if (Array.isArray(consolidadoRpc.anexos)) {
+              todosAnexos = consolidadoRpc.anexos;
+            }
+            if (consolidadoRpc.total && typeof consolidadoRpc.total === "object") {
+              valoresFinais = consolidadoRpc.total as any;
+            }
+            if (typeof consolidadoRpc.sobra === "number") {
+              sobraFinal = consolidadoRpc.sobra;
+            }
           }
         } else {
           // Se a RPC falhou e não encontrou fechamentoFinalId, registra erro seguro sem insert concorrente inseguro (Gate 6)
