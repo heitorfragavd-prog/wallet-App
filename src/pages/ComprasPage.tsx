@@ -2,9 +2,9 @@ import React, { useState, useEffect, useCallback } from 'react';
 import { ShoppingCart, RefreshCw, AlertCircle, ShieldAlert } from 'lucide-react';
 import { DashboardLayout } from '@/shared/components/layouts/DashboardLayout';
 import { Button } from '@/shared/components/ui/button';
-import { useWorkspace } from '@/shared/contexts/WorkspaceContext';
-import { useAuth } from '@/shared/contexts/AuthContext';
-import { supabase } from '@/shared/lib/supabase';
+import { useWorkspace } from '@/contexts/WorkspaceContext';
+import { useAuth } from '@/domains/auth/hooks/useAuth';
+import { supabase } from '@/integrations/supabase/client';
 import {
   PainelComprasAdmin,
   PedidoCompraAdmin,
