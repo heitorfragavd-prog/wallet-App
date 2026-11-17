@@ -83,6 +83,17 @@ describe('👑 WALLET CEO 3.0 — Etapa 11 (Gates 1, 2 e 3): Conexão Gmail e Si
       expect(res?.error).toContain('Vault');
     });
 
+    it('valida que o dashboard do Gmail possui a definição correta de isConnected e banner de configuração', () => {
+      const componentPath = path.resolve(
+        process.cwd(),
+        'src/domains/gmail/components/GmailDocumentsDashboard.tsx'
+      );
+      const code = fs.readFileSync(componentPath, 'utf-8');
+      expect(code).toContain("const isConnected = integration?.status === 'conectado';");
+      expect(code).toContain('configPending && !isConnected');
+      expect(code).toContain('Integração Gmail aguardando configuração do Google Cloud.');
+    });
+
     it('executa desconexão segura via endpoint /gmail-sync/disconnect', async () => {
       const { supabase } = await import('../../src/integrations/supabase/client');
       vi.mocked(supabase.auth.getSession).mockResolvedValue({
