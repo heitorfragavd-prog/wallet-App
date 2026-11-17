@@ -462,17 +462,27 @@ serve(async (req: Request) => {
       let duplicatesSkipped = 0;
       let errorsCount = 0;
 
+      // Otimização de Egress/Consumo (Missão 4): Pré-carrega mensagens em batch único
+      const messageIds = messages.map((m) => m.id);
+      const existingSet = new Set<string>();
+      if (messageIds.length > 0) {
+        const { data: existingList } = await supabase
+          .from("gmail_mensagens_processadas")
+          .select("message_id")
+          .eq("workspace_id", workspaceId)
+          .in("message_id", messageIds);
+
+        if (existingList) {
+          for (const row of existingList) {
+            if (row.message_id) existingSet.add(row.message_id);
+          }
+        }
+      }
+
       for (const msgRef of messages) {
         messagesChecked++;
-        // Idempotência: Verifica se a mensagem já foi processada anteriormente
-        const { data: existing } = await supabase
-          .from("gmail_mensagens_processadas")
-          .select("id")
-          .eq("workspace_id", workspaceId)
-          .eq("message_id", msgRef.id)
-          .maybeSingle();
-
-        if (existing) {
+        // Idempotência instantânea: Pula e-mails já processados sem tráfego de rede extra
+        if (existingSet.has(msgRef.id)) {
           duplicatesSkipped++;
           continue;
         }
@@ -538,8 +548,13 @@ serve(async (req: Request) => {
                   detalhesExtracao.chave_acesso = nfeParsed.chaveAcesso;
                   detalhesExtracao.numero_nota = nfeParsed.numeroNota;
                   detalhesExtracao.emitente = nfeParsed.emitente;
+                  detalhesExtracao.cnpj = nfeParsed.emitente.cnpj;
                   detalhesExtracao.valor_total = nfeParsed.valores.valorTotal;
+                  detalhesExtracao.valor = nfeParsed.valores.valorTotal;
                   detalhesExtracao.duplicatas = nfeParsed.duplicatas;
+                  if (nfeParsed.duplicatas && nfeParsed.duplicatas.length > 0) {
+                    detalhesExtracao.data_vencimento = nfeParsed.duplicatas[0].vencimento;
+                  }
                   detalhesExtracao.itens_qtd = nfeParsed.itens.length;
 
                   // Deduplicação Global Trilateral (GATE 6)

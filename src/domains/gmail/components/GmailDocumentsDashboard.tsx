@@ -31,6 +31,66 @@ import type {
   GmailDocumentType,
 } from '../types';
 
+/**
+ * Helpers seguros para extração e renderização defensiva de campos do Gmail
+ */
+export function getEmitenteNome(
+  emitente: unknown,
+  beneficiario?: unknown
+): string {
+  if (typeof emitente === 'string' && emitente.trim()) return emitente.trim();
+  if (emitente && typeof emitente === 'object') {
+    const emObj = emitente as Record<string, unknown>;
+    if (typeof emObj.nomeFantasia === 'string' && emObj.nomeFantasia.trim()) {
+      return emObj.nomeFantasia.trim();
+    }
+    if (typeof emObj.razaoSocial === 'string' && emObj.razaoSocial.trim()) {
+      return emObj.razaoSocial.trim();
+    }
+    if (typeof emObj.cnpj === 'string' && emObj.cnpj.trim()) {
+      return `CNPJ: ${emObj.cnpj.trim()}`;
+    }
+  }
+  if (typeof beneficiario === 'string' && beneficiario.trim()) return beneficiario.trim();
+  return '';
+}
+
+export function getCnpj(det: Record<string, unknown> = {}): string {
+  if (typeof det.cnpj === 'string' && det.cnpj.trim()) return det.cnpj.trim();
+  if (det.emitente && typeof det.emitente === 'object') {
+    const emObj = det.emitente as Record<string, unknown>;
+    if (typeof emObj.cnpj === 'string' && emObj.cnpj.trim()) return emObj.cnpj.trim();
+  }
+  return '';
+}
+
+export function getValor(det: Record<string, unknown> = {}): number | undefined {
+  if (typeof det.valor === 'number' && !isNaN(det.valor)) return det.valor;
+  if (typeof det.valor_total === 'number' && !isNaN(det.valor_total)) return det.valor_total;
+  if (typeof det.valor === 'string') {
+    const parsed = parseFloat(det.valor);
+    if (!isNaN(parsed)) return parsed;
+  }
+  if (typeof det.valor_total === 'string') {
+    const parsed = parseFloat(det.valor_total);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return undefined;
+}
+
+export function getDataVencimento(det: Record<string, unknown> = {}): string | null {
+  if (typeof det.data_vencimento === 'string' && det.data_vencimento.trim()) {
+    return det.data_vencimento.trim();
+  }
+  if (Array.isArray(det.duplicatas) && det.duplicatas.length > 0) {
+    const dup = det.duplicatas[0];
+    if (dup && typeof dup === 'object' && typeof dup.vencimento === 'string' && dup.vencimento.trim()) {
+      return dup.vencimento.trim();
+    }
+  }
+  return null;
+}
+
 interface GmailDocumentsDashboardProps {
   workspaceId: string;
   isExecutiveUser?: boolean;
@@ -323,12 +383,13 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
       // Busca por texto
       if (searchQuery.trim()) {
         const q = searchQuery.toLowerCase().trim();
-        const remetenteMatch = m.remetente.toLowerCase().includes(q);
-        const assuntoMatch = (m.assunto || '').toLowerCase().includes(q);
-        const emitenteMatch = (m.detalhes_extracao?.emitente || '').toLowerCase().includes(q);
-        const cnpjMatch = (m.detalhes_extracao?.cnpj || '').includes(q);
-        const chaveMatch = (m.detalhes_extracao?.chave_acesso || '').includes(q);
-        const linhaMatch = (m.detalhes_extracao?.linha_digitavel || '').includes(q);
+        const remetenteMatch = String(m.remetente || '').toLowerCase().includes(q);
+        const assuntoMatch = String(m.assunto || '').toLowerCase().includes(q);
+        const emitenteNome = getEmitenteNome(m.detalhes_extracao?.emitente, m.detalhes_extracao?.beneficiario);
+        const emitenteMatch = emitenteNome.toLowerCase().includes(q);
+        const cnpjMatch = getCnpj(m.detalhes_extracao || {}).includes(q);
+        const chaveMatch = String(m.detalhes_extracao?.chave_acesso || '').includes(q);
+        const linhaMatch = String(m.detalhes_extracao?.linha_digitavel || '').includes(q);
 
         return remetenteMatch || assuntoMatch || emitenteMatch || cnpjMatch || chaveMatch || linhaMatch;
       }
@@ -621,9 +682,15 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
           ) : (
             <div className="divide-y divide-border/40">
               {filteredMessages.map((msg) => {
-                const det = msg.detalhes_extracao || {};
+                const det = (msg.detalhes_extracao || {}) as Record<string, unknown>;
                 const hasProposal = Boolean(msg.proposal_id);
                 const isProcessingThis = actionInProgressId === msg.proposal_id;
+                const emitenteNome = getEmitenteNome(det.emitente, det.beneficiario);
+                const cnpj = getCnpj(det);
+                const valor = getValor(det);
+                const dataVencimento = getDataVencimento(det);
+                const chaveAcesso = typeof det.chave_acesso === 'string' ? det.chave_acesso : '';
+                const linhaDigitavel = typeof det.linha_digitavel === 'string' ? det.linha_digitavel : '';
 
                 return (
                   <div
@@ -635,16 +702,16 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
                       <div className="flex flex-wrap items-center gap-2">
                         {getDocTypeBadge(msg.tipo_documento_detectado)}
 
-                        {det.emitente && (
+                        {emitenteNome && (
                           <span className="text-xs font-semibold text-foreground truncate max-w-xs flex items-center gap-1">
-                            <Building className="w-3.5 h-3.5 text-muted-foreground" />
-                            {det.emitente}
+                            <Building className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                            <span className="truncate">{emitenteNome}</span>
                           </span>
                         )}
 
-                        {det.cnpj && (
+                        {cnpj && (
                           <Badge variant="outline" className="text-[10px] font-mono text-muted-foreground">
-                            CNPJ: {det.cnpj}
+                            CNPJ: {cnpj}
                           </Badge>
                         )}
 
@@ -664,12 +731,12 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
                       </div>
 
                       {/* Identificadores: Chave SEFAZ ou Linha Digitável */}
-                      {(det.chave_acesso || det.linha_digitavel) && (
+                      {(chaveAcesso || linhaDigitavel) && (
                         <div className="flex flex-wrap items-center gap-2 pt-1">
-                          {det.chave_acesso && (
+                          {chaveAcesso && (
                             <button
                               type="button"
-                              onClick={() => handleCopy(det.chave_acesso!, `chave-${msg.id}`)}
+                              onClick={() => handleCopy(chaveAcesso, `chave-${msg.id}`)}
                               className="text-[11px] font-mono bg-muted/40 hover:bg-muted/70 text-muted-foreground px-2 py-0.5 rounded border border-border/40 flex items-center gap-1 transition-colors"
                               title="Clique para copiar chave de acesso"
                             >
@@ -678,14 +745,14 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
                               ) : (
                                 <Copy className="w-3 h-3" />
                               )}
-                              <span>Chave: {det.chave_acesso.slice(0, 8)}...{det.chave_acesso.slice(-8)}</span>
+                              <span>Chave: {chaveAcesso.slice(0, 8)}...{chaveAcesso.slice(-8)}</span>
                             </button>
                           )}
 
-                          {det.linha_digitavel && (
+                          {linhaDigitavel && (
                             <button
                               type="button"
-                              onClick={() => handleCopy(det.linha_digitavel!, `linha-${msg.id}`)}
+                              onClick={() => handleCopy(linhaDigitavel, `linha-${msg.id}`)}
                               className="text-[11px] font-mono bg-muted/40 hover:bg-muted/70 text-muted-foreground px-2 py-0.5 rounded border border-border/40 flex items-center gap-1 transition-colors"
                               title="Clique para copiar código de barras"
                             >
@@ -694,7 +761,7 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
                               ) : (
                                 <Copy className="w-3 h-3" />
                               )}
-                              <span>Linha: {det.linha_digitavel.slice(0, 10)}...</span>
+                              <span>Linha: {linhaDigitavel.slice(0, 10)}...</span>
                             </button>
                           )}
                         </div>
@@ -704,13 +771,13 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
                     {/* Coluna 2: Valores Financeiros e Vencimento */}
                     <div className="flex md:flex-col items-center md:items-end justify-between md:justify-center gap-1 shrink-0 pt-2 md:pt-0 border-t md:border-t-0 border-border/30">
                       <div className="text-sm font-bold text-foreground">
-                        {fmtBrl(det.valor)}
+                        {fmtBrl(valor)}
                       </div>
 
-                      {det.data_vencimento && (
+                      {dataVencimento && (
                         <div className="text-[11px] text-muted-foreground flex items-center gap-1">
-                          <Clock className="w-3 h-3 text-orange-400" />
-                          <span>Venc: {fmtData(det.data_vencimento)}</span>
+                          <Clock className="w-3 h-3 text-orange-400 shrink-0" />
+                          <span>Venc: {fmtData(dataVencimento)}</span>
                         </div>
                       )}
                     </div>

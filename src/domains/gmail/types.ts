@@ -45,11 +45,23 @@ export interface GmailIntegration {
 
 export interface GmailExtractionDetails {
   beneficiario?: string;
-  emitente?: string;
+  emitente?:
+    | string
+    | {
+        cnpj?: string;
+        razaoSocial?: string;
+        nomeFantasia?: string;
+      };
   cnpj?: string;
   valor?: number;
+  valor_total?: number;
   data_vencimento?: string;
   data_emissao?: string;
+  duplicatas?: Array<{
+    numero?: string;
+    vencimento?: string;
+    valor?: number;
+  }>;
   linha_digitavel?: string;
   codigo_barras?: string;
   chave_acesso?: string;
@@ -58,6 +70,7 @@ export interface GmailExtractionDetails {
   tipo_anexo?: string;
   confianca?: 'alta' | 'media' | 'baixa';
   motivo_revisao?: string;
+  [key: string]: unknown;
 }
 
 export interface GmailProcessedMessage {

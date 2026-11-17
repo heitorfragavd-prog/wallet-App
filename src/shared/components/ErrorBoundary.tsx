@@ -17,8 +17,8 @@ interface State {
 }
 
 /**
- * ErrorBoundary â€” captura erros de renderizaÃ§Ã£o React em subtrees
- * com integraÃ§Ã£o ao ErrorService e rastreabilidade por cÃ³digo de suporte.
+ * ErrorBoundary — captura erros de renderização React em subtrees
+ * com integração ao ErrorService e rastreabilidade por código de suporte.
  *
  * Uso:
  *   <ErrorBoundary context="Dashboard">
@@ -90,11 +90,11 @@ export class ErrorBoundary extends Component<Props, State> {
               Ops! Algo deu errado
             </h2>
             <p className="text-muted-foreground max-w-sm">
-              Um erro inesperado ocorreu nesta seÃ§Ã£o. Tente recarregar ou voltar para a pÃ¡gina anterior.
+              Um erro inesperado ocorreu nesta seção. Tente recarregar ou voltar para a página anterior.
             </p>
             {errorCode && (
               <p className="font-mono text-xs text-muted-foreground/80">
-                CÃ³digo de suporte: <span className="font-semibold">{errorCode}</span>
+                Código de suporte: <span className="font-semibold">{errorCode}</span>
               </p>
             )}
             {process.env.NODE_ENV === "development" && this.state.error && (
