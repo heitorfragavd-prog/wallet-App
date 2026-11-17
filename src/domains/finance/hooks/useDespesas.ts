@@ -220,9 +220,12 @@ async function fetchDespesas(params: DespesasQueryParams = {}): Promise<Despesa[
   if (normStartDate) despesasQuery = despesasQuery.gte("data", normStartDate);
   if (normEndDate) despesasQuery = despesasQuery.lte("data", normEndDate);
 
+  const TRANSACOES_FIELDS =
+    "id, user_id, workspace_id, categoria_id, tipo, descricao, valor, data, parcela_atual, total_parcelas, parent_id, created_at, updated_at, metodo_pagamento, conta_id, observacoes, divipay_external_id, deduplication_key, categorias(nome, cor, icone)";
+
   let transacoesQuery = supabase
     .from("transacoes")
-    .select("*, categorias(nome, cor, icone)")
+    .select(TRANSACOES_FIELDS)
     .eq("tipo", "despesa")
     .eq("workspace_id", workspaceId);
 
