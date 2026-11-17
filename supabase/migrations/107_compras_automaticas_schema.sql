@@ -132,55 +132,65 @@ CREATE POLICY compras_itens_service ON public.compras_pedidos_itens
 CREATE POLICY compras_calendario_auth ON public.compras_fornecedores_calendario
   FOR ALL TO authenticated
   USING (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   )
   WITH CHECK (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   );
 
 CREATE POLICY compras_prod_ref_auth ON public.compras_produtos_referencia
   FOR ALL TO authenticated
   USING (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   )
   WITH CHECK (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   );
 
 CREATE POLICY compras_config_auth ON public.compras_config
   FOR ALL TO authenticated
   USING (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   )
   WITH CHECK (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   );
 
 CREATE POLICY compras_pedidos_auth ON public.compras_pedidos
   FOR ALL TO authenticated
   USING (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   )
   WITH CHECK (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   );
 
 CREATE POLICY compras_itens_auth ON public.compras_pedidos_itens
   FOR ALL TO authenticated
   USING (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   )
   WITH CHECK (
-    public.is_workspace_member(workspace_id, auth.uid()) OR
+    public.is_active_workspace_member(workspace_id, auth.uid()) OR
+    public.is_workspace_executive(workspace_id, auth.uid()) OR
     EXISTS (SELECT 1 FROM public.workspaces w WHERE w.id = workspace_id AND w.user_id = auth.uid())
   );
 
