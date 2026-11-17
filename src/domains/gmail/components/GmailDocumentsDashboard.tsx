@@ -46,6 +46,7 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
   const [syncing, setSyncing] = useState(false);
   const [connecting, setConnecting] = useState(false);
   const [disconnecting, setDisconnecting] = useState(false);
+  const [configPending, setConfigPending] = useState(false);
   const [actionInProgressId, setActionInProgressId] = useState<string | null>(null);
 
   const [integration, setIntegration] = useState<GmailIntegration | null>(null);
@@ -166,10 +167,16 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
       const auth = await GmailIntegrationService.getAuthUrl(workspaceId, redirectUri);
       if (auth?.authUrl) {
         window.location.href = auth.authUrl;
+      } else if (auth?.isConfigurationPending) {
+        setConfigPending(true);
+        toast({
+          title: 'Integração Gmail',
+          description: 'Integração Gmail aguardando configuração do Google Cloud.',
+        });
       } else {
         toast({
           title: 'Erro ao iniciar autenticação',
-          description: 'Não foi possível obter a URL oficial de conexão do Google.',
+          description: auth?.error || 'Não foi possível obter a URL oficial de conexão do Google.',
           variant: 'destructive',
         });
       }
@@ -434,6 +441,8 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
                     <AlertTriangle className="w-3.5 h-3.5 text-amber-400" />
                     {integration?.status === 'erro_autenticacao'
                       ? 'Autenticação Expirada'
+                      : configPending
+                      ? 'Aguardando Google Cloud'
                       : 'Não Conectado'}
                   </Badge>
 
@@ -453,6 +462,19 @@ export const GmailDocumentsDashboard: React.FC<GmailDocumentsDashboardProps> = (
               )}
             </div>
           </div>
+
+          {/* Banner de aviso administrativo quando a configuração do Google Cloud estiver pendente */}
+          {configPending && !isConnected && (
+            <div className="mt-3 p-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-xs text-amber-300 flex items-start gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+              <div className="space-y-0.5">
+                <p className="font-semibold text-amber-200">Integração Gmail aguardando configuração do Google Cloud.</p>
+                <p className="text-[11px] text-muted-foreground">
+                  As credenciais OAuth (GOOGLE_CLIENT_ID e GOOGLE_CLIENT_SECRET) precisam ser adicionadas ao Supabase Vault para liberar a autorização com rodopointcafe@gmail.com.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Timestamp do último sync */}
           {integration?.ultimo_sync_em && (
