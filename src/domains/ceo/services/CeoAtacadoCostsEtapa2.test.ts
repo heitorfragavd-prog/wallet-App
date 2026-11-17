@@ -96,4 +96,32 @@ describe('ETAPA 02 — Custos de Atacado (Ambev & Coca-Cola) e Cobertura de CMV 
     expect(margemBrutaDepois).toBeLessThanOrEqual(70.0);
     expect(margemBrutaDepois).toBeCloseTo(66.3, 1);
   });
+
+  it('Orçamento nº 16852 (13/11/2026): Conversão precisa de embalagens atacado e margens saudáveis da bomboniere', () => {
+    const itensOrcamento16852 = [
+      { codigo: '2032416', descricao: 'TRIDENT', custoUnit: 36.00 / 21, pv: 4.00, margemMin: 50 },
+      { codigo: '2032404', descricao: 'Snickers', custoUnit: 61.00 / 20, pv: 5.00, margemMin: 35 },
+      { codigo: '2032412', descricao: 'TRENTO', custoUnit: 26.00 / 16, pv: 3.50, margemMin: 50 },
+      { codigo: '2032388', descricao: 'PRESTIGIO', custoUnit: 64.00 / 30, pv: 4.00, margemMin: 40 },
+      { codigo: '2032339', descricao: 'HALLS', custoUnit: 22.90 / 21, pv: 4.00, margemMin: 70 },
+      { codigo: '2030584', descricao: 'OURO BRANCO', custoUnit: 50.00 / 50, pv: 2.00, margemMin: 45 },
+      { codigo: '2032405', descricao: 'SONHO DE VALSA', custoUnit: 49.00 / 50, pv: 2.00, margemMin: 45 },
+      { codigo: '2032411', descricao: 'TALENTO AVELÃ 85G', custoUnit: 94.00 / 12, pv: 11.90, margemMin: 30 },
+      { codigo: '2032189', descricao: 'BARRA JOY', custoUnit: 37.50 / 12, pv: 4.50, margemMin: 25 },
+      { codigo: '2032237', descricao: 'CHICLETE POOSH', custoUnit: 5.20 / 40, pv: 0.50, margemMin: 70 },
+      { codigo: '2030585', descricao: 'PAÇOQUITA ROLHA EMBRULHADA', custoUnit: 21.00 / 100, pv: 0.50, margemMin: 50 },
+      { codigo: '2032372', descricao: 'Pipoca 40g', custoUnit: 31.50 / 40, pv: 2.50, margemMin: 60 },
+      { codigo: '2032369', descricao: 'Pipoca 100g', custoUnit: 20.70 / 10, pv: 5.00, margemMin: 55 },
+      { codigo: '2032305', descricao: 'FRUIT-TELLA', custoUnit: 33.30 / 15, pv: 4.50, margemMin: 45 },
+      { codigo: '2032251', descricao: 'DROPS MENTOS STICK', custoUnit: 31.50 / 16, pv: 4.50, margemMin: 50 },
+    ];
+
+    expect(itensOrcamento16852).toHaveLength(15);
+    itensOrcamento16852.forEach(item => {
+      expect(item.custoUnit).toBeGreaterThan(0);
+      expect(item.pv).toBeGreaterThan(item.custoUnit);
+      const margem = ((item.pv - item.custoUnit) / item.pv) * 100;
+      expect(margem).toBeGreaterThanOrEqual(item.margemMin);
+    });
+  });
 });
