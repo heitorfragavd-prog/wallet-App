@@ -1,5 +1,5 @@
 // Supabase Edge Functions & Deno Shared Module
-// Engine Inteligente de Conferência de Estoque via Telegram (Etapa 4D - Gates 3, 4, 5, 7, 8)
+// Engine Inteligente de Conferência de Estoque via Telegram (Etapa 4D.1 - Gates 1, 2, 3, 4, 5)
 // Rodo Point — Grupo "Conversas da Loja"
 
 import { SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2";
@@ -24,6 +24,7 @@ export interface ReferenciaProdutoDB {
   categoria?: string;
   unidade_medida?: string;
   quantidade_referencia?: number;
+  validacao_status?: "confirmado" | "pendente_validacao" | "divergente";
   ativo?: boolean;
 }
 
@@ -88,7 +89,11 @@ export function normalizar(str: string): string {
 /**
  * Converte palavras numéricas em números (ex: "duas" -> 2, "oito" -> 8)
  */
-function converterPalavraParaNumero(palavra: string): number | null {
+export function converterPalavraParaNumero(palavra: string): number | null {
+  if (!palavra || !palavra.trim()) return null;
+  const norm = normalizar(palavra);
+  if (!norm) return null;
+
   const mapa: Record<string, number> = {
     zero: 0,
     um: 1, uma: 1,
@@ -96,7 +101,7 @@ function converterPalavraParaNumero(palavra: string): number | null {
     tres: 3, três: 3,
     quatro: 4,
     cinco: 5,
-    seis: 6,
+    seis: 6, meia: 6,
     sete: 7,
     oito: 8,
     nove: 9,
@@ -115,10 +120,14 @@ function converterPalavraParaNumero(palavra: string): number | null {
     quarenta: 40,
     cinquenta: 50,
   };
-  const norm = normalizar(palavra);
   if (mapa[norm] !== undefined) return mapa[norm];
-  const num = Number(palavra.replace(",", "."));
-  return !isNaN(num) ? num : null;
+
+  if (/^\d+(?:[.,]\d+)?$/.test(norm)) {
+    const num = Number(norm.replace(",", "."));
+    return !isNaN(num) ? num : null;
+  }
+
+  return null;
 }
 
 /**
@@ -136,9 +145,9 @@ export function getDataOperacionalBrasilia(): string {
 }
 
 /**
- * Localiza o melhor produto de referência com regras de desambiguação
+ * Localiza o melhor produto de referência com regras estritas de desambiguação
  */
-function encontrarMelhorReferencia(
+export function encontrarMelhorReferencia(
   trecho: string,
   catalogo: ReferenciaProdutoDB[]
 ): { referencia: ReferenciaProdutoDB | null; pontuacao: number } {
@@ -150,7 +159,10 @@ function encontrarMelhorReferencia(
   const temCatupiry = normTrecho.includes("catupiry");
   const tem200 = normTrecho.includes("200") || normTrecho.includes("caculinha") || normTrecho.includes("mini");
   const tem250 = normTrecho.includes("250");
+  const tem350 = normTrecho.includes("350") || normTrecho.includes("lata");
   const tem473 = normTrecho.includes("473") || normTrecho.includes("latao") || normTrecho.includes("grande");
+  const tem2l = normTrecho.includes("2l") || normTrecho.includes("2 litros") || normTrecho.includes("2 pet");
+  const tem600 = normTrecho.includes("600");
 
   let melhor: ReferenciaProdutoDB | null = null;
   let maiorPont = 0;
@@ -162,7 +174,10 @@ function encontrarMelhorReferencia(
     const prodEhCatupiry = normNome.includes("catupiry");
     const prodEh200 = normNome.includes("200");
     const prodEh250 = normNome.includes("250");
+    const prodEh350 = normNome.includes("350");
     const prodEh473 = normNome.includes("473");
+    const prodEh2l = normNome.includes("2l");
+    const prodEh600 = normNome.includes("600");
 
     // Guardrails de exclusão de variantes
     if (temZero && !prodEhZero && (normNome.includes("coca") || normNome === "zero")) continue;
@@ -170,8 +185,14 @@ function encontrarMelhorReferencia(
     if (temCatupiry && !prodEhCatupiry && normNome.includes("coxinha")) continue;
     if (!temCatupiry && normTrecho.includes("coxinha") && prodEhCatupiry) continue;
     if (tem200 && !prodEh200 && normNome.includes("coca")) continue;
+    if (!tem200 && prodEh200 && normTrecho.includes("coca") && (tem350 || tem2l || tem600)) continue;
     if (tem473 && !prodEh473 && (normNome.includes("red bull") || normNome.includes("monster"))) continue;
     if (tem250 && !prodEh250 && normNome.includes("red bull")) continue;
+
+    // Sabores de Monster
+    if (normNome.includes("mango loco") && !normTrecho.includes("mango")) continue;
+    if (!normNome.includes("mango loco") && normTrecho.includes("mango")) continue;
+    if (normNome.includes("ultra paradise") && !normTrecho.includes("paradise") && !normTrecho.includes("ultra")) continue;
 
     const palavras = normNome.split(" ").filter((p) => p.length > 2);
     let score = 0;
@@ -188,7 +209,7 @@ function encontrarMelhorReferencia(
       }
     }
 
-    if (score > maiorPont && score >= 45) {
+    if (score > maiorPont && score >= 40) {
       maiorPont = score;
       melhor = ref;
     }
@@ -198,7 +219,61 @@ function encontrarMelhorReferencia(
 }
 
 /**
- * Interpreta texto, áudio transcrito ou OCR de estoque contra as referências cadastradas
+ * Extrai a quantidade numérica informada no segmento, isolando especificações técnicas
+ * de volume, gramatura ou números presentes no nome do produto (Gate 3).
+ */
+export function extrairQuantidadeDoTrecho(seg: string, produtoNome: string): number | null {
+  // 1. Operador explícito de atribuição (=, :, -, tem, são, etc.)
+  // Ex: "Red Bull 250 ml = 3" -> 3
+  // Ex: "Coca 200 ml: 8" -> 8
+  // Ex: "Coca 350 ml Zero = 2" -> 2
+  const matchOp = seg.match(/(?:=|:|-|\b(?:tem|sao|são|sobrou|sobraram|restam|estoque|qtd|quantidade)\b)\s*(\d+(?:[.,]\d+)?|[a-zA-ZÀ-ÿ]+)/i);
+  if (matchOp) {
+    const val = converterPalavraParaNumero(matchOp[1]);
+    if (val !== null && !isNaN(val)) return val;
+  }
+
+  // 2. Remove especificações explícitas de volume / peso com suas unidades
+  // Ex: "250 ml", "250ml", "350 ml", "200ml", "473 ml", "500ml", "600ml", "2l", "84g", "76g", "100un", "1kg", "500g"
+  let limpo = seg.replace(/\b\d+\s*(?:ml|l|litros?|g|gramas?|kg|quilos?|un|unidades?)\b/gi, " ");
+
+  // 3. Remove os números específicos que fazem parte do nome daquele produto
+  // Ex: se produtoNome é "Coca 200ml", remove 200; se "Red Bull 473 ml", remove 473
+  const numsNoNome = produtoNome.match(/\b\d+\b/g);
+  if (numsNoNome) {
+    for (const n of numsNoNome) {
+      limpo = limpo.replace(new RegExp(`\\b${n}\\b`, "g"), " ");
+    }
+  }
+
+  // 4. Se o produto tem "zero" no nome (ex: Coca Zero, Monster Zero), remove "zero" do texto
+  // para não confundir o nome do produto com quantidade 0
+  if (normalizar(produtoNome).includes("zero")) {
+    limpo = limpo.replace(/\bzero\b/gi, " ");
+  }
+
+  // 5. Procura números com unidades de contagem de estoque
+  // Ex: "3 caixas", "8 fardos", "2 display", "15 latas"
+  const matchUnidade = limpo.match(/\b(\d+(?:[.,]\d+)?|[a-zA-ZÀ-ÿ]+)\s*(?:cx|caixas?|fardos?|unidades?|un|display|pacotes?|pct|latas?|garrafas?)\b/i);
+  if (matchUnidade) {
+    const val = converterPalavraParaNumero(matchUnidade[1]);
+    if (val !== null && !isNaN(val)) return val;
+  }
+
+  // 6. Procura qualquer número remanescente no segmento limpo
+  const tokens = limpo.split(/[\s=:]+/);
+  for (const tok of tokens) {
+    const val = converterPalavraParaNumero(tok);
+    if (val !== null && !isNaN(val) && val >= 0) {
+      return val;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Interpreta texto, áudio transcrito ou OCR de estoque contra as referências cadastradas (Gate 3)
  */
 export function interpretarTextoEstoque(
   textoOriginal: string,
@@ -212,89 +287,99 @@ export function interpretarTextoEstoque(
   const isMensagemCorrecao =
     /\b(corrigindo|correcao|correção|retificando|retificacao|na verdade|errei)\b/i.test(normTextoGlobal);
 
-  const textoGlobalTemZero =
-    /\b(zerou|zerado|acabou|nao tem|não tem|sem estoque)\b/i.test(normTextoGlobal);
-
-  // Divide mantendo expressões lógicas
-  const segmentos = textoLimpo
-    .split(/[\n;]|,\s*(?=[a-zA-ZÀ-ÿ0-9])|\be\b(?=\s+(?:o|a|os|as|[a-zA-ZÀ-ÿ0-9]))/gi)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // Divide mantendo expressões lógicas (frases por ponto, quebra de linha ou ponto-e-vírgula)
+  const frases = textoLimpo
+    .split(/[\n;.]/g)
+    .map((f) => f.trim())
+    .filter((f) => f.length > 0);
 
   const itens: ItemEstoqueInterpretado[] = [];
   const itensNaoReconhecidos: string[] = [];
   const produtosVistos = new Set<string>();
 
-  for (const seg of segmentos) {
-    const normSeg = normalizar(seg);
-    if (!normSeg) continue;
+  for (const frase of frases) {
+    const normFrase = normalizar(frase);
+    if (!normFrase) continue;
 
-    // Detecta se o segmento é aviso de pendência
-    const isPendente =
-      /\b(nao contei|não contei|nao consegui contar|falta contar|depois vejo|nao sei|não sei|pulei)\b/i.test(normSeg);
+    const fraseComecaComZero =
+      /^(?:acabou|zerou|zerado|nao tem|não tem|sem estoque)\b/i.test(frase.trim()) ||
+      /\b(?:acabou|zerou|zerado|sem estoque)\s+(?:tudo|todos)\b/i.test(frase);
 
-    // Detecta se é imprecisão não numérica
-    const isInconsistente =
-      /\b(bastante|muito|pouco|cheio|meio pacote|alguns|varios|vários)\b/i.test(normSeg);
+    // Divide a frase em trechos por vírgula ou conjunção "e"
+    const trechos = frase
+      .split(/,\s*(?=[a-zA-ZÀ-ÿ0-9])|\be\b(?=\s+(?:o|a|os|as|[a-zA-ZÀ-ÿ0-9]))/gi)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
 
-    // Detecta zero explícito no segmento
-    const segTemZero =
-      textoGlobalTemZero ||
-      /\b(zerou|zerado|acabou|nao tem|não tem|sem estoque)\b/i.test(normSeg) ||
-      /\b0\b/.test(normSeg);
+    for (const seg of trechos) {
+      const normSeg = normalizar(seg);
+      if (!normSeg) continue;
 
-    const { referencia, pontuacao } = encontrarMelhorReferencia(seg, referencias);
+      // Detecta se o segmento é aviso de pendência exclusivo
+      const isPendente =
+        /\b(nao contei|não contei|nao consegui contar|falta contar|depois vejo|nao sei|não sei|pulei)\b/i.test(normSeg);
 
-    if (referencia) {
-      if (produtosVistos.has(referencia.produto_nome)) continue;
-      produtosVistos.add(referencia.produto_nome);
+      // Detecta se é imprecisão não numérica
+      const isInconsistente =
+        /\b(bastante|muito|pouco|cheio|meio pacote|alguns|varios|vários)\b/i.test(normSeg);
 
-      let qtd: number | null = null;
-      let tipoInf: "confirmado_positivo" | "confirmado_zero" | "pendente" | "inconsistente" = "confirmado_positivo";
+      const { referencia, pontuacao } = encontrarMelhorReferencia(seg, referencias);
 
-      if (isPendente) {
-        tipoInf = "pendente";
-      } else if (isInconsistente) {
-        tipoInf = "inconsistente";
-      } else if (segTemZero && !/\b\d+\b/.test(normSeg.replace(/\b0\b/g, ""))) {
-        tipoInf = "confirmado_zero";
-        qtd = 0;
-      } else {
-        // Tenta extrair quantidade numérica
-        const tokens = seg.split(/[\s=:]+/);
-        for (const tok of tokens) {
-          const num = converterPalavraParaNumero(tok);
-          if (num !== null && num >= 0) {
-            qtd = num;
-            break;
-          }
-        }
+      if (referencia) {
+        if (produtosVistos.has(referencia.produto_nome)) continue;
+        produtosVistos.add(referencia.produto_nome);
 
-        if (qtd !== null) {
-          if (qtd === 0) {
-            tipoInf = "confirmado_zero";
-          } else {
-            tipoInf = "confirmado_positivo";
-          }
-        } else {
+        // Detecta zero explícito no segmento EXCLUSIVO (sem vazar para outras frases)
+        const ehProdutoComZeroNoNome = normalizar(referencia.produto_nome).includes("zero");
+        const segTemTermoZero =
+          fraseComecaComZero ||
+          /\b(zerou|zerado|acabou|nao tem|não tem|sem estoque|esgotado)\b/i.test(normSeg) ||
+          (!ehProdutoComZeroNoNome && /\bzero\b/i.test(normSeg)) ||
+          /[=:]\s*0\b/.test(seg);
+
+        let qtd: number | null = null;
+        let tipoInf: "confirmado_positivo" | "confirmado_zero" | "pendente" | "inconsistente" = "confirmado_positivo";
+
+        if (isPendente) {
           tipoInf = "pendente";
-        }
-      }
+          qtd = null;
+        } else if (isInconsistente) {
+          tipoInf = "inconsistente";
+          qtd = null;
+        } else if (segTemTermoZero) {
+          tipoInf = "confirmado_zero";
+          qtd = 0;
+        } else {
+          // Extrai quantidade sem confundir números de ml/g com estoque
+          qtd = extrairQuantidadeDoTrecho(seg, referencia.produto_nome);
 
-      itens.push({
-        produto_nome: referencia.produto_nome,
-        fornecedor_nome: referencia.fornecedor_nome,
-        quantidade_informada: qtd,
-        unidade_medida: referencia.unidade_medida || "unidade",
-        tipo_informacao: tipoInf,
-        confianca: Math.min(100, Math.round(pontuacao)),
-        is_correcao: isMensagemCorrecao,
-        motivo_inconsistencia: isInconsistente ? "Quantidade imprecisa ou não numérica" : undefined,
-      });
-    } else {
-      const ignoraveis = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "estoque", "contagem", "segue", "loja", "corrigindo", "na verdade"];
-      if (!ignoraveis.includes(normSeg)) {
-        itensNaoReconhecidos.push(seg);
+          if (qtd !== null) {
+            if (qtd === 0) {
+              tipoInf = "confirmado_zero";
+            } else {
+              tipoInf = "confirmado_positivo";
+            }
+          } else {
+            // Sem número informado: permanece pendente sem inventar número falso
+            tipoInf = "pendente";
+          }
+        }
+
+        itens.push({
+          produto_nome: referencia.produto_nome,
+          fornecedor_nome: referencia.fornecedor_nome,
+          quantidade_informada: qtd,
+          unidade_medida: referencia.unidade_medida || "unidade",
+          tipo_informacao: tipoInf,
+          confianca: Math.min(100, Math.round(pontuacao)),
+          is_correcao: isMensagemCorrecao,
+          motivo_inconsistencia: isInconsistente ? "Quantidade imprecisa ou não numérica" : undefined,
+        });
+      } else {
+        const ignoraveis = ["oi", "ola", "olá", "bom dia", "boa tarde", "boa noite", "estoque", "contagem", "segue", "loja", "corrigindo", "na verdade"];
+        if (!ignoraveis.includes(normSeg)) {
+          itensNaoReconhecidos.push(seg);
+        }
       }
     }
   }
@@ -491,7 +576,7 @@ export async function processarEstoqueConversasLoja(params: {
   // 8. Carrega base de produtos de referência ativos do workspace
   const { data: refsDB, error: refsErr } = await supabase
     .from("compras_produtos_referencia")
-    .select("id, workspace_id, fornecedor_id, fornecedor_nome, produto_nome, categoria, unidade_medida, quantidade_referencia, ativo")
+    .select("id, workspace_id, fornecedor_id, fornecedor_nome, produto_nome, categoria, unidade_medida, quantidade_referencia, validacao_status, ativo")
     .eq("workspace_id", workspaceId)
     .eq("ativo", true);
 
