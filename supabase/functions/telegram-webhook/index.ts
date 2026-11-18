@@ -3727,11 +3727,46 @@ serve(async (req) => {
     let workspaceId: string | null = null;
 
     if (isGroup) {
-      const { data: gc } = await supabase
+      const { data: dataGc } = await supabase
         .from("telegram_grupos_config")
         .select("*")
         .eq("chat_id", chatId)
         .maybeSingle();
+
+      let gc = dataGc;
+
+      if (!gc) {
+        // Tenta auto-vincular se o grupo for "Conversas da Loja" e estiver com chat_id nulo (Etapa 4D)
+        const chatTitle = String(message.chat?.title || "").toLowerCase();
+        if (chatTitle.includes("conversas") || chatTitle.includes("loja") || text.includes("/vincular_loja")) {
+          const { data: pendente } = await supabase
+            .from("telegram_grupos_config")
+            .select("*")
+            .eq("tipo_grupo", "conversas_loja")
+            .eq("ativo", true)
+            .is("chat_id", null)
+            .limit(1)
+            .maybeSingle();
+
+          if (pendente) {
+            await supabase
+              .from("telegram_grupos_config")
+              .update({
+                chat_id: Number(chatId) || chatId,
+                acoes_permitidas: ["conferencia_estoque", "contagem_produtos", "registrar_recado"],
+                funcionalidades_autorizadas: ["comunicacao_equipe", "tarefas_turno", "conferencia_estoque", "compras_inteligentes"]
+              })
+              .eq("id", pendente.id);
+
+            gc = {
+              ...pendente,
+              chat_id: chatId,
+              acoes_permitidas: ["conferencia_estoque", "contagem_produtos", "registrar_recado"],
+              funcionalidades_autorizadas: ["comunicacao_equipe", "tarefas_turno", "conferencia_estoque", "compras_inteligentes"]
+            };
+          }
+        }
+      }
 
       if (!gc) {
         await sendReply(
@@ -5392,6 +5427,22 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         `💬 <b>Wallet IA:</b>\n${parsed.respostaConfirmacaoAgradecimento || "Obrigado pela resposta! Registrado com sucesso."}`
       );
       return new Response("OK", { status: 200, headers: corsHeaders });
+    }
+
+    // ─── 0.0. CONFERÊNCIA DE ESTOQUE E COMPRAS — GRUPO CONVERSAS DA LOJA (Etapa 4D - Gate 3, 4 e 5) ───
+    if (isGroup && grupoConfig?.tipo_grupo === "conversas_loja") {
+      const { processarEstoqueConversasLoja } = await import("../_shared/ai/compras-telegram-engine.ts");
+      return await processarEstoqueConversasLoja({
+        supabase,
+        message,
+        grupoConfig,
+        workspaceId: workspaceId!,
+        userId,
+        telegramBotToken: telegramBotToken!,
+        supabaseUrl,
+        supabaseServiceKey,
+        sendReply,
+      });
     }
 
     // ─── 0.0. FECHAMENTO DE CAIXA: SOBRA (Grupo Fechamento ou Chat) ───
