@@ -233,9 +233,10 @@ export function extrairQuantidadeDoTrecho(seg: string, produtoNome: string): num
     if (val !== null && !isNaN(val)) return val;
   }
 
-  // 2. Remove especificações explícitas de volume / peso com suas unidades
-  // Ex: "250 ml", "250ml", "350 ml", "200ml", "473 ml", "500ml", "600ml", "2l", "84g", "76g", "100un", "1kg", "500g"
-  let limpo = seg.replace(/\b\d+\s*(?:ml|l|litros?|g|gramas?|kg|quilos?|un|unidades?)\b/gi, " ");
+  // 2. Remove especificações explícitas de volume / peso com suas unidades (ex: ml, litros, g, kg)
+  // Ex: "250 ml", "250ml", "350 ml", "200ml", "473 ml", "500ml", "600ml", "2l", "84g", "76g", "1kg", "500g"
+  // (Nota: NÃO remover "un" ou "unidades", pois são unidades de contagem de estoque válidas!)
+  let limpo = seg.replace(/\b\d+\s*(?:ml|l|litros?|g|gramas?|kg|quilos?)\b/gi, " ");
 
   // 3. Remove os números específicos que fazem parte do nome daquele produto
   // Ex: se produtoNome é "Coca 200ml", remove 200; se "Red Bull 473 ml", remove 473
@@ -484,6 +485,8 @@ export async function processarEstoqueConversasLoja(params: {
   supabaseUrl: string;
   supabaseServiceKey: string;
   sendReply: (text: string) => Promise<unknown>;
+  transcricaoAudio?: string;
+  origemTipoParam?: string;
 }): Promise<Response> {
   const {
     supabase,
@@ -494,6 +497,8 @@ export async function processarEstoqueConversasLoja(params: {
     supabaseUrl,
     supabaseServiceKey,
     sendReply,
+    transcricaoAudio,
+    origemTipoParam,
   } = params;
 
   const corsHeaders = {
@@ -513,14 +518,16 @@ export async function processarEstoqueConversasLoja(params: {
   const senderName = [senderFirstName, senderLastName].filter(Boolean).join(" ") || "Colaborador Loja";
   const senderTelegramId = typeof fromObj.id === "number" ? fromObj.id : null;
 
-  // 3. Extrai texto, legenda ou mídia
+  // 3. Extrai texto, legenda ou áudio transcrito (Etapa 4D.1 - Gate 4)
   const rawText = (typeof message?.text === "string" ? message.text : "").trim();
   const rawCaption = (typeof message?.caption === "string" ? message.caption : "").trim();
-  let textoParaProcessar = rawText || rawCaption || "";
+  let textoParaProcessar = (transcricaoAudio || rawText || rawCaption || "").trim();
 
   const hasPhoto = Array.isArray(message?.photo) && message.photo.length > 0;
   const hasDoc = !!message?.document;
-  let origemTipo = "telegram_texto";
+  const hasVoice = !!(message?.voice || message?.audio || message?.video_note);
+
+  let origemTipo = origemTipoParam || (hasVoice ? "telegram_audio" : "telegram_texto");
 
   // 4. Se for imagem/foto e não tiver legenda suficiente, utiliza Visão AI
   if ((hasPhoto || hasDoc) && textoParaProcessar.length < 5) {
@@ -662,11 +669,28 @@ export async function processarEstoqueConversasLoja(params: {
     }
   }
 
-  // 11. Montagem da Resposta Operacional do Telegram
+  // 11. Consulta Modo de Simulação (Gate 7)
+  let isSimulacao = true;
+  try {
+    const { data: cfg } = await supabase
+      .from("compras_config")
+      .select("simulacao_modo")
+      .eq("workspace_id", workspaceId)
+      .maybeSingle();
+    if (cfg && typeof cfg.simulacao_modo === "boolean") {
+      isSimulacao = cfg.simulacao_modo;
+    }
+  } catch (e) {
+    console.warn("[compras-telegram-engine] Aviso ao checar simulacao_modo:", e);
+  }
+
+  // 12. Montagem da Resposta Operacional do Telegram
   const dataFmt = dataOperacional.split("-").reverse().join("/");
-  let replyMsg = `📦 <b>Wallet Compras — Conferência Registrada</b>\n`;
+  const simPrefix = isSimulacao ? `🧪 <b>[MODO SIMULAÇÃO ATIVO]</b>\n` : "";
+  let replyMsg = `${simPrefix}📦 <b>Wallet Compras — Conferência Registrada</b>\n`;
   replyMsg += `👤 <b>Conferente:</b> <i>${senderName}</i>\n`;
-  replyMsg += `📅 <b>Data:</b> <code>${dataFmt}</code>\n\n`;
+  replyMsg += `📅 <b>Data:</b> <code>${dataFmt}</code>\n`;
+  replyMsg += `📡 <b>Canal:</b> <code>${origemTipo}</code>\n\n`;
 
   if (persistidos.length > 0) {
     replyMsg += `✅ <b>Itens Computados com Sucesso:</b>\n`;

@@ -3736,9 +3736,14 @@ serve(async (req) => {
       let gc = dataGc;
 
       if (!gc) {
-        // Tenta auto-vincular se o grupo for "Conversas da Loja" e estiver com chat_id nulo (Etapa 4D)
-        const chatTitle = String(message.chat?.title || "").toLowerCase();
-        if (chatTitle.includes("conversas") || chatTitle.includes("loja") || text.includes("/vincular_loja")) {
+        // Hardening de Vinculação de Grupos (Etapa 4D.1 - Gate 5):
+        // Exige comando administrativo explícito /vincular_loja <TOKEN> com chave de ativação.
+        // NUNCA vincula por mera correspondência de palavras no título do chat.
+        const trimmedText = text.trim();
+        if (trimmedText.startsWith("/vincular_loja")) {
+          const parts = trimmedText.split(/\s+/);
+          const tokenInformado = (parts[1] || "").trim();
+
           const { data: pendente } = await supabase
             .from("telegram_grupos_config")
             .select("*")
@@ -3748,23 +3753,60 @@ serve(async (req) => {
             .limit(1)
             .maybeSingle();
 
-          if (pendente) {
-            await supabase
-              .from("telegram_grupos_config")
-              .update({
-                chat_id: Number(chatId) || chatId,
-                acoes_permitidas: ["conferencia_estoque", "contagem_produtos", "registrar_recado"],
-                funcionalidades_autorizadas: ["comunicacao_equipe", "tarefas_turno", "conferencia_estoque", "compras_inteligentes"]
-              })
-              .eq("id", pendente.id);
+          if (!pendente) {
+            await sendReply("⚠️ O grupo Conversas da Loja já possui um chat_id configurado ou não está ativo no cadastro.");
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
 
-            gc = {
-              ...pendente,
-              chat_id: chatId,
+          // Valida token de segurança cadastrado em compras_config
+          const { data: cfg } = await supabase
+            .from("compras_config")
+            .select("token_vinculacao_loja, workspace_id")
+            .limit(1)
+            .maybeSingle();
+
+          const tokenEsperado = (cfg?.token_vinculacao_loja || "").trim();
+
+          if (!tokenEsperado || tokenInformado !== tokenEsperado) {
+            await sendReply(
+              `⛔ <b>Acesso Negado: Token de vinculação inválido.</b>\n\n` +
+              `Para vincular este grupo com segurança, utilize:\n` +
+              `<code>/vincular_loja &lt;CHAVE_DE_SEGURANCA&gt;</code>\n\n` +
+              `<i>Obtenha a chave de segurança no Painel da Wallet em Compras > Configurações.</i>`
+            );
+            return new Response("OK", { status: 200, headers: corsHeaders });
+          }
+
+          // Token válido: vincula o grupo de forma segura
+          await supabase
+            .from("telegram_grupos_config")
+            .update({
+              chat_id: Number(chatId) || chatId,
               acoes_permitidas: ["conferencia_estoque", "contagem_produtos", "registrar_recado"],
               funcionalidades_autorizadas: ["comunicacao_equipe", "tarefas_turno", "conferencia_estoque", "compras_inteligentes"]
-            };
+            })
+            .eq("id", pendente.id);
+
+          if (cfg?.workspace_id) {
+            await supabase
+              .from("compras_config")
+              .update({ grupo_conversas_loja_chat_id: String(chatId) })
+              .eq("workspace_id", cfg.workspace_id);
           }
+
+          gc = {
+            ...pendente,
+            chat_id: chatId,
+            acoes_permitidas: ["conferencia_estoque", "contagem_produtos", "registrar_recado"],
+            funcionalidades_autorizadas: ["comunicacao_equipe", "tarefas_turno", "conferencia_estoque", "compras_inteligentes"]
+          };
+
+          await sendReply(
+            `✅ <b>Grupo "Conversas da Loja" Vinculado com Sucesso!</b>\n\n` +
+            `🔒 <b>Segurança:</b> Token autenticado pela governança executiva.\n` +
+            `🆔 <b>Chat ID:</b> <code>${chatId}</code>\n` +
+            `📦 O bot agora está autorizado a processar conferências de estoque e compras neste grupo.`
+          );
         }
       }
 
@@ -5442,6 +5484,8 @@ Responda ESTRITAMENTE em formato JSON (sem markdown):
         supabaseUrl,
         supabaseServiceKey,
         sendReply,
+        transcricaoAudio: hasAudio ? text : undefined,
+        origemTipoParam: hasAudio ? "telegram_audio" : undefined,
       });
     }
 
