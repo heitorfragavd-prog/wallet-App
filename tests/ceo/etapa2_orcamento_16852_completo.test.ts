@@ -1,15 +1,12 @@
 import { describe, it, expect } from 'vitest';
+import { loadCsvRows, getCsvPath } from '../../scripts/validate_and_ingest_16852.mjs';
 import fs from 'fs';
-import { parseCSV } from '../../scripts/validate_and_ingest_16852.mjs';
 
 describe('ETAPA 02 — Catálogo de Referência Completo do Orçamento nº 16852 (54 Itens)', () => {
-  const csvPath = 'C:/Users/Heitor/Downloads/atacado_16852_dados_para_antigravity.csv';
-  const csvExists = fs.existsSync(csvPath);
-
   it('Gate 1: Ingestão e validação matemática de todos os 54 itens do orçamento', () => {
-    expect(csvExists).toBe(true);
-    const text = fs.readFileSync(csvPath, 'utf8');
-    const rows = parseCSV(text);
+    const csvPath = getCsvPath();
+    expect(fs.existsSync(csvPath)).toBe(true);
+    const rows = loadCsvRows();
     expect(rows).toHaveLength(54);
 
     let totalGeral = 0;
@@ -42,8 +39,7 @@ describe('ETAPA 02 — Catálogo de Referência Completo do Orçamento nº 16852
   });
 
   it('Gate 2: Separação determinística de custos unitários e custos por grama (sem estimativa precipitada)', () => {
-    const text = fs.readFileSync(csvPath, 'utf8');
-    const rows = parseCSV(text);
+    const rows = loadCsvRows();
 
     // Chita 500g: 6.20 / 500g = 0.0124/g determinístico; 100 un é aproximado
     const chita = rows.find(r => r[1] === '6800');
@@ -61,8 +57,7 @@ describe('ETAPA 02 — Catálogo de Referência Completo do Orçamento nº 16852
   });
 
   it('Gate 3: Preservação de integridade dos 15 produtos vinculados com margem positiva', () => {
-    const text = fs.readFileSync(csvPath, 'utf8');
-    const rows = parseCSV(text);
+    const rows = loadCsvRows();
 
     const vinculados = rows.filter(r => r[12] === 'PDV relacionado — conferir identidade exata');
     expect(vinculados).toHaveLength(15);
@@ -78,8 +73,7 @@ describe('ETAPA 02 — Catálogo de Referência Completo do Orçamento nº 16852
   });
 
   it('Gate 4: Isolamento das 15 variações de sabor/SKU e 24 itens pendentes de contagem/correspondência', () => {
-    const text = fs.readFileSync(csvPath, 'utf8');
-    const rows = parseCSV(text);
+    const rows = loadCsvRows();
 
     const revalidar = rows.filter(r => r[12] === 'PDV relacionado — REVALIDAR sabor/SKU');
     expect(revalidar).toHaveLength(15);
