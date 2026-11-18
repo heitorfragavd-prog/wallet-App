@@ -190,10 +190,15 @@ function converterPalavraParaNumero(palavra: string): number | null {
     quarenta: 40,
     cinquenta: 50,
   };
+  if (!palavra || !palavra.trim()) return null;
   const norm = normalizar(palavra);
+  if (!norm) return null;
   if (mapa[norm] !== undefined) return mapa[norm];
-  const num = Number(palavra.replace(",", "."));
-  return !isNaN(num) ? num : null;
+  if (/^\d+(?:[.,]\d+)?$/.test(norm)) {
+    const num = Number(norm.replace(",", "."));
+    return !isNaN(num) ? num : null;
+  }
+  return null;
 }
 
 /**
@@ -214,68 +219,78 @@ export function interpretarMensagemEstoque(
     normTexto.includes("retificando") ||
     normTexto.includes("errei");
 
-  const textoGlobalTemZero = 
-    normTexto.includes("acabou") || 
-    normTexto.includes("zerou") || 
-    normTexto.includes("nao tem") || 
-    normTexto.includes("sem estoque");
-
   const itensInterpretados: ItemEstoqueInterpretado[] = [];
   const produtosEncontrados = new Set<string>();
 
-  // 1. Dividir texto em linhas ou separadores comuns ("\n", ",", ";", " e ")
-  const segmentos = textoLimpo
-    .split(/[\n;]|,\s*(?=[a-zA-ZÀ-ÿ])|\be\b(?=\s+(?:o|a|os|as|[a-zA-ZÀ-ÿ0-9]))/gi)
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+  // 1. Dividir texto em frases por quebra de linha, ponto final ou ponto e vírgula
+  const frases = textoLimpo
+    .split(/[\n;.]/g)
+    .map((f) => f.trim())
+    .filter((f) => f.length > 0);
 
-  for (const seg of segmentos) {
-    const normSeg = normalizar(seg);
-    if (!normSeg) continue;
+  for (const frase of frases) {
+    const normFrase = normalizar(frase);
+    if (!normFrase) continue;
 
-    // Detecta se é aviso de pendência
-    const isPendente = 
-      normSeg.includes("nao contei") || 
-      normSeg.includes("nao consegui contar") || 
-      normSeg.includes("falta contar") || 
-      normSeg.includes("nao deu tempo") ||
-      normSeg.includes("pendente");
+    const fraseComecaComZero =
+      /^(?:acabou|zerou|zerado|nao tem|não tem|sem estoque)\b/i.test(frase.trim()) ||
+      /\b(?:acabou|zerou|zerado|sem estoque)\s+(?:tudo|todos)\b/i.test(frase);
 
-    // Detecta se é aviso de zero estrito (não confunde com "Coca Zero"!)
-    const isZero = 
-      normSeg.includes("acabou") || 
-      normSeg.includes("zerou") || 
-      normSeg.includes("nao tem") || 
-      normSeg.includes("sem estoque") ||
-      normSeg.includes("ta zerado") ||
-      normSeg.includes("esta zerado") ||
-      textoGlobalTemZero ||
-      /[=:]\s*0\b/.test(seg);
+    // Divide a frase em trechos por vírgula ou conjunção "e"
+    const trechos = frase
+      .split(/,\s*(?=[a-zA-ZÀ-ÿ0-9])|\be\b(?=\s+(?:o|a|os|as|[a-zA-ZÀ-ÿ0-9]))/gi)
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
 
-    // Detecta se é impreciso ("tem bastante", "tem muito", "pouco")
-    const isImpreciso = 
-      normSeg.includes("bastante") || 
-      normSeg.includes("muito") || 
-      normSeg.includes("pouco") || 
-      normSeg.includes("cheio");
+    for (const seg of trechos) {
+      const normSeg = normalizar(seg);
+      if (!normSeg) continue;
 
-    // Identifica qual produto o segmento menciona
-    const prodRef = identificarProdutoReferencia(seg, catalogo);
-    if (!prodRef) continue;
+      // Identifica qual produto o segmento menciona
+      const prodRef = identificarProdutoReferencia(seg, catalogo);
+      if (!prodRef) continue;
 
-    produtosEncontrados.add(prodRef.produto_nome);
+      produtosEncontrados.add(prodRef.produto_nome);
 
-    if (isPendente) {
-      itensInterpretados.push({
-        produto_nome: prodRef.produto_nome,
-        quantidade_informada: null,
-        unidade_medida: prodRef.unidade_medida || "unidade",
-        tipo_informacao: "pendente",
-        confianca: 0.95,
-        is_correcao: isCorrecao,
-      });
-      continue;
-    }
+      // Detecta se é aviso de pendência
+      const isPendente = 
+        normSeg.includes("nao contei") || 
+        normSeg.includes("nao consegui contar") || 
+        normSeg.includes("falta contar") || 
+        normSeg.includes("nao deu tempo") ||
+        normSeg.includes("pendente");
+
+      // Detecta se é aviso de zero estrito LOCAL (não confunde com "Coca Zero"!)
+      const ehProdutoComZeroNoNome = normalizar(prodRef.produto_nome).includes("zero");
+      const isZero = 
+        fraseComecaComZero ||
+        normSeg.includes("acabou") || 
+        normSeg.includes("zerou") || 
+        normSeg.includes("nao tem") || 
+        normSeg.includes("sem estoque") ||
+        normSeg.includes("ta zerado") ||
+        normSeg.includes("esta zerado") ||
+        (!ehProdutoComZeroNoNome && normSeg.includes("zero")) ||
+        /[=:]\s*0\b/.test(seg);
+
+      // Detecta se é impreciso ("tem bastante", "tem muito", "pouco")
+      const isImpreciso = 
+        normSeg.includes("bastante") || 
+        normSeg.includes("muito") || 
+        normSeg.includes("pouco") || 
+        normSeg.includes("cheio");
+
+      if (isPendente) {
+        itensInterpretados.push({
+          produto_nome: prodRef.produto_nome,
+          quantidade_informada: null,
+          unidade_medida: prodRef.unidade_medida || "unidade",
+          tipo_informacao: "pendente",
+          confianca: 0.95,
+          is_correcao: isCorrecao,
+        });
+        continue;
+      }
 
     // Extrair quantidade numérica isolando o que não é o nome do produto
     let qtdExtraida: number | null = null;
@@ -340,6 +355,7 @@ export function interpretarMensagemEstoque(
       continue;
     }
   }
+}
 
   // Identificar pendências em relação aos produtos esperados
   const itensPendentes: string[] = [];
