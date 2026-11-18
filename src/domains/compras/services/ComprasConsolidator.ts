@@ -102,11 +102,9 @@ export function consolidarItensEmSessao(
     } else if (item.tipo_informacao === "inconsistente") {
       novoStatus = "inconsistente";
       novaQtd = qtdAnterior; // Mantém valor anterior se já existia
-      pendentesCount++;
     } else {
       novoStatus = "pendente_contagem";
       novaQtd = null;
-      pendentesCount++;
     }
 
     // Gate 10: Se for correção, atualiza a quantidade para o novo valor, sem somar
