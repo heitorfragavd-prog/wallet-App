@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { processarEstoqueConversasLoja } from "../../supabase/functions/_shared/ai/compras-telegram-engine";
 
