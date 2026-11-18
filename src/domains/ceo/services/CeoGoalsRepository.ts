@@ -62,7 +62,11 @@ export class CeoGoalsRepository {
       const { data, error } = await query;
 
       if (error) {
-        if (error.code === '42P01' || error.message?.includes('does not exist')) {
+        if (
+          error.code === '42P01' ||
+          error.message?.includes('does not exist') ||
+          error.message?.includes('schema cache')
+        ) {
           return {
             data: [],
             isConfigured: false,
