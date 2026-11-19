@@ -76,6 +76,7 @@ export default function ComprasPage() {
           status_estoque: item.status_estoque,
           contagem_origem: item.contagem_origem,
           contagem_confirmada_em: item.contagem_confirmada_em,
+          ajuste_manual: Boolean(item.ajuste_manual),
         });
       }
 
@@ -110,6 +111,7 @@ export default function ComprasPage() {
         .from('compras_pedidos_itens')
         .update({
           quantidade_ajustada: novaQtd,
+          ajuste_manual: true,
         })
         .eq('id', itemId);
 
