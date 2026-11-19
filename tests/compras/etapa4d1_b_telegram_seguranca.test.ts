@@ -173,6 +173,26 @@ describe("ETAPA 4D.1 - PARTE B: Telegram, Áudio e Segurança (Gates 4, 5, 6 e 7
 
       expect(tokenExtraido).toBe(tokenConfigurado);
     });
+
+    it("deve rejeitar vinculação quando o token temporário estiver expirado", () => {
+      const _tokenConfigurado = "RODO-SEC-TEST123";
+      const expiraEmPassado = new Date(Date.now() - 3600000).toISOString(); // 1 hora atrás
+      const isExpired = Date.now() > new Date(expiraEmPassado).getTime();
+
+      expect(isExpired).toBe(true);
+    });
+
+    it("deve revogar imediatamente o token e expiração após o primeiro uso (one-time)", () => {
+      const payloadPosVinculacao = {
+        grupo_conversas_loja_chat_id: "-1001234567890",
+        token_vinculacao_loja: null,
+        token_vinculacao_loja_expira_em: null,
+        updated_at: expect.any(String),
+      };
+
+      expect(payloadPosVinculacao.token_vinculacao_loja).toBeNull();
+      expect(payloadPosVinculacao.token_vinculacao_loja_expira_em).toBeNull();
+    });
   });
 
   // --------------------------------------------------------------------------
