@@ -37,6 +37,7 @@ export interface ItemPedidoAdmin {
   status_estoque: 'pendente_contagem' | 'confirmado_zero' | 'confirmado_positivo' | 'inconsistente';
   contagem_origem?: string;
   contagem_confirmada_em?: string;
+  ajuste_manual?: boolean;
 }
 
 export interface PedidoCompraAdmin {
@@ -238,7 +239,16 @@ export const PainelComprasAdmin: React.FC<PainelComprasAdminProps> = ({
 
                     return (
                       <tr key={item.id} className="hover:bg-muted/50 transition-colors">
-                        <td className="py-3 font-medium">{item.produto_nome}</td>
+                        <td className="py-3 font-medium">
+                          <div className="flex items-center gap-2">
+                            <span>{item.produto_nome}</span>
+                            {item.ajuste_manual && (
+                              <Badge variant="outline" className="text-[10px] bg-amber-50 text-amber-700 border-amber-300 py-0 px-1.5 font-normal">
+                                Ajustado
+                              </Badge>
+                            )}
+                          </div>
+                        </td>
                         <td className="py-3 text-muted-foreground">{item.categoria}</td>
                         <td className="py-3 text-center font-mono">
                           {item.quantidade_referencia} {item.unidade_medida}
