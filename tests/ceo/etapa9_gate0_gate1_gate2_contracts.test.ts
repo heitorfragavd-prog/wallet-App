@@ -189,5 +189,18 @@ describe('ETAPA 09 — PR A: Auditoria e Contratos de Metas Empresariais (Gates 
       expect(sql).toContain('wallet_business_goals_update');
       expect(sql).toContain('wallet_business_goals_delete');
     });
+
+    it('a migration 115 corrige o trigger retornando OLD em operacoes de DELETE', () => {
+      const migration115Path = path.resolve(
+        __dirname,
+        '../../supabase/migrations/115_fix_wallet_business_goals_delete_trigger.sql'
+      );
+      expect(fs.existsSync(migration115Path)).toBe(true);
+      const sql = fs.readFileSync(migration115Path, 'utf8');
+
+      expect(sql).toContain("IF TG_OP = 'DELETE' THEN");
+      expect(sql).toContain('RETURN OLD;');
+      expect(sql).toContain('tem_acesso_executivo_proprietario');
+    });
   });
 });

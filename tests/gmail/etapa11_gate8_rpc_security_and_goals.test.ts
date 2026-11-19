@@ -118,6 +118,41 @@ describe('👑 WALLET CEO 3.0 — Hardening de Segurança (Gates 6-8) & Metas Em
       expect(resDates.success).toBe(false);
       expect(resDates.error).toContain('não pode ser anterior à data de início');
     });
+
+    it('GATE 1: CeoGoalsRepository.deleteGoal executa delete com sucesso agora que trigger retorna OLD', async () => {
+      vi.mocked(supabase.from).mockReturnValue({
+        delete: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockResolvedValue({ error: null }),
+      } as any);
+
+      const res = await CeoGoalsRepository.deleteGoal('goal-teste-123');
+      expect(res.success).toBe(true);
+    });
+
+    it('GATE 2 & 3: CeoGoalsRepository.updateGoal recalibra valor alvo e status com histórico estruturado', async () => {
+      vi.mocked(supabase.from).mockReturnValue({
+        select: vi.fn().mockReturnThis(),
+        eq: vi.fn().mockReturnThis(),
+        single: vi.fn().mockResolvedValue({
+          data: {
+            id: 'goal-1',
+            valor_alvo: 20000,
+            status: 'ativa',
+            history: [],
+          },
+          error: null,
+        }),
+        update: vi.fn().mockReturnThis(),
+      } as any);
+
+      const res = await CeoGoalsRepository.updateGoal(
+        'goal-1',
+        { valor_alvo: 25000, status: 'pausada' },
+        'user-heitor',
+        'Ajuste semanal'
+      );
+      expect(res.success).toBe(true);
+    });
   });
 
   // ===========================================================================
