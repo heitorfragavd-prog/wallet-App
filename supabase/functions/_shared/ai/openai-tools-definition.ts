@@ -318,6 +318,116 @@ export const OPENAI_EXTENDED_READ_TOOLS: OpenAiFunctionDefinition[] = [
       parameters: { type: "object", properties: {}, additionalProperties: false },
     },
   },
+  {
+    type: "function",
+    function: {
+      name: "consultar_top_produtos_pdv",
+      description:
+        "Consulta os produtos mais vendidos no PDV Eyemobile com quantidades reais, faturamento, custos unitários, CMV, lucro bruto e margem de lucro calculada. Permite ordenar por quantidade, faturamento ou lucro bruto em reais.",
+      parameters: {
+        type: "object",
+        properties: {
+          data_inicio: { type: "string", description: "Data inicial no formato YYYY-MM-DD (ex: ontem ou início do mês)" },
+          data_fim: { type: "string", description: "Data final no formato YYYY-MM-DD" },
+          limite: { type: "integer", description: "Quantidade máxima de produtos no ranking (padrão: 5)" },
+          ordenar_por: {
+            type: "string",
+            enum: ["quantidade", "faturamento", "lucro_bruto", "margem"],
+            description: "Critério de ordenação do ranking de produtos (padrão: 'quantidade')",
+          },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_vendas_por_produto",
+      description:
+        "Pesquisa as vendas de um produto específico (ex: 'Pão de Queijo', 'Café', 'Trident', 'Salgados') no PDV Eyemobile. Retorna quantidade total vendida, faturamento, preço médio, evolução diária no período, custo unitário e margem bruta.",
+      parameters: {
+        type: "object",
+        properties: {
+          busca: { type: "string", description: "Nome ou código do produto para pesquisa" },
+          data_inicio: { type: "string", description: "Data inicial no formato YYYY-MM-DD" },
+          data_fim: { type: "string", description: "Data final no formato YYYY-MM-DD" },
+        },
+        required: ["busca"],
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_margens_produtos",
+      description:
+        "Consulta o ranking de rentabilidade e margem bruta dos produtos: maiores margens, menores margens, produtos críticos (< 30% ou prejuízo) ou produtos que foram vendidos mas ainda estão sem custo cadastrado.",
+      parameters: {
+        type: "object",
+        properties: {
+          tipo_ranking: {
+            type: "string",
+            enum: ["maiores_margens", "menores_margens", "sem_custo", "criticos"],
+            description: "Tipo de relatório desejado: maiores_margens, menores_margens, sem_custo ou criticos",
+          },
+          limite: { type: "integer", description: "Número de produtos (padrão: 10)" },
+          data_inicio: { type: "string", description: "Data inicial YYYY-MM-DD" },
+          data_fim: { type: "string", description: "Data final YYYY-MM-DD" },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_cmv_periodo",
+      description:
+        "Consulta o CMV (Custo das Mercadorias Vendidas) consolidado do período, receita com custo conhecido, receita sem custo e segregação estrita entre compras de estoque e CMV de saídas.",
+      parameters: {
+        type: "object",
+        properties: {
+          data_inicio: { type: "string", description: "Data inicial YYYY-MM-DD" },
+          data_fim: { type: "string", description: "Data final YYYY-MM-DD" },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_custos_fornecedores",
+      description:
+        "Consulta o catálogo de custos cadastrados por fornecedor, histórico de aquisição e variações de preços.",
+      parameters: {
+        type: "object",
+        properties: {
+          fornecedor: { type: "string", description: "Nome opcional do fornecedor (ex: 'Xodó Foods', 'Spal', 'Ambev')" },
+          produto: { type: "string", description: "Nome opcional do produto para filtrar" },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
+  {
+    type: "function",
+    function: {
+      name: "consultar_rentabilidade_combos",
+      description:
+        "Consulta o desempenho, participação no faturamento e margem dos combos promocionais e ofertas combinadas vendidas no PDV.",
+      parameters: {
+        type: "object",
+        properties: {
+          data_inicio: { type: "string", description: "Data inicial YYYY-MM-DD" },
+          data_fim: { type: "string", description: "Data final YYYY-MM-DD" },
+        },
+        additionalProperties: false,
+      },
+    },
+  },
 ];
 
 

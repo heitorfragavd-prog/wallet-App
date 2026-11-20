@@ -56,6 +56,8 @@ export interface FinancialDataQuery {
   };
   /** Optional LIKE filter: { column, pattern }. Applied with SQL LIKE operator. */
   like?: { column: string; pattern: string };
+  /** Optional row limit to prevent default truncation on analytical queries */
+  limit?: number;
 }
 
 export type FinancialDataRow = Record<string, unknown>;
@@ -327,19 +329,28 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
         equals: { workspace_id: context.workspaceId, tipo: "receita" },
         dateRange: period ? { column: "data", ...period } : undefined,
         like: { column: "descricao", pattern: "Venda Eyemobile %" },
+        limit: 5000,
       });
       return rows.map((row): SalesPdvDetailRecord => {
         assertScope(row, context);
         let itemsList: SalesPdvItemRecord[] = [];
-        if (Array.isArray(row.itens)) {
-          itemsList = (row.itens as any[]).map((it) => ({
+        let rawItens = row.itens;
+        if (typeof rawItens === "string") {
+          try {
+            rawItens = JSON.parse(rawItens);
+          } catch {
+            rawItens = [];
+          }
+        }
+        if (Array.isArray(rawItens)) {
+          itemsList = (rawItens as any[]).map((it) => ({
             id: it.id || "",
             productName: String(it.product_name || it.name || "Item sem nome"),
             quantity: Number(it.quantity || it.quantidade || 1),
             price: Number(it.price || it.preco || 0),
             total: Number(it.total || Number(it.quantity || 1) * Number(it.price || 0)),
-            productId: it.product_id,
-            time: it.time,
+            productId: it.product_id ? String(it.product_id) : undefined,
+            time: it.time ? String(it.time) : undefined,
           }));
         }
         return {
@@ -363,6 +374,7 @@ export function createFinancialRepository(execute: FinancialDataExecutor): Finan
           workspace_id: context.workspaceId,
           ...(params?.categoria ? { categoria: params.categoria } : {}),
         },
+        limit: 1000,
       });
       return rows.map((row): InventoryItemRecord => {
         assertScope(row, context);

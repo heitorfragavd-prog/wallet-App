@@ -276,6 +276,9 @@ export async function executeSupabaseFinancialQuery(
   if (query.like) {
     builder = builder.like(query.like.column, query.like.pattern);
   }
+  if (typeof query.limit === "number" && query.limit > 0) {
+    builder = builder.limit(query.limit);
+  }
   const result = await builder;
   if (result.error) throw new Error("financial_query_failed");
   return result.data ?? [];

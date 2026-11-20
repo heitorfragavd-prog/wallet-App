@@ -1617,6 +1617,12 @@ export async function handleOrchestratorHttpRequest(
       "consultar_analise_despesas_ceo",
       "consultar_oportunidades_ceo",
       "propor_experimento_comercial",
+      "consultar_top_produtos_pdv",
+      "consultar_vendas_por_produto",
+      "consultar_margens_produtos",
+      "consultar_cmv_periodo",
+      "consultar_custos_fornecedores",
+      "consultar_rentabilidade_combos",
     ]);
 
     if (effectiveAgentType !== "ceo" || !canRoleAccessCeoBrain(userRole)) {
