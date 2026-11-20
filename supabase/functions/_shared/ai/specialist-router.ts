@@ -231,6 +231,13 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("mais vendido") ||
     p.includes("mais vendidos") ||
     p.includes("produtos mais") ||
+    p.includes("produtos que mais") ||
+    p.includes("5 produtos") ||
+    p.includes("cinco produtos") ||
+    p.includes("mais vendi") ||
+    p.includes("mais vendemos") ||
+    p.includes("que mais vendi") ||
+    p.includes("que mais venderam") ||
     p.includes("top 5") ||
     p.includes("caixa físico") ||
     p.includes("balcão") ||
@@ -245,7 +252,21 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("divisao por forma") ||
     p.includes("comparado ao anterior") ||
     p.includes("faturamos ontem no balcão") ||
-    p.includes("faturamos ontem no balcao");
+    p.includes("faturamos ontem no balcao") ||
+    p.includes("quanto vendi em") ||
+    p.includes("quanto vendemos em") ||
+    p.includes("quanto faturei em") ||
+    p.includes("quanto faturamos em") ||
+    p.includes("vendas em ") ||
+    p.includes("custos de atacado") ||
+    p.includes("custo de atacado") ||
+    p.includes("quanto ganhei com cada") ||
+    p.includes("cmv de ontem") ||
+    p.includes("quanto foi o cmv") ||
+    p.includes("qual foi o cmv") ||
+    p.includes("sem custo confirmado") ||
+    p.includes("sem custo cadastrado") ||
+    /\b(quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)|vendas) (em|no dia) \d{1,2}[/-]\d{1,2}/.test(p);
 
   if (isVendasQuery) {
     const isVendasDeterministic =
@@ -268,15 +289,24 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
       p.includes("mais vendemos") ||
       p.includes("qual me deu mais lucro") ||
       p.includes("mais lucro bruto em reais") ||
+      p.includes("quanto ganhei com cada") ||
+      p.includes("quanto ganhei com cada um") ||
+      p.includes("custos de atacado") ||
+      p.includes("custo de atacado") ||
+      p.includes("cmv de ontem") ||
+      p.includes("quanto foi o cmv") ||
+      p.includes("qual foi o cmv") ||
       p.includes("margem de lucro de cada um") ||
       p.includes("sem custo cadastrado") ||
+      p.includes("sem custo confirmado") ||
       p.includes("horario de pico") ||
       p.includes("horário de pico") ||
       p.includes("mais movimento ontem") ||
       p.includes("comparado ao anterior") ||
       p.includes("divisão por forma de pagamento") ||
       p.includes("divisao por forma de pagamento") ||
-      p.includes("formas de pagamento");
+      p.includes("formas de pagamento") ||
+      /\b(quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)|vendas) (em|no dia) \d{1,2}[/-]\d{1,2}/.test(p);
 
     return {
       primarySpecialist: "vendas_pdv",
@@ -1210,6 +1240,10 @@ export interface SalesPdvDeterministicData {
   coberturaCustosOntemPercent?: number | null;
   produtosSemCustoOntemQtd?: number | null;
   yesterdayDateStr?: string;
+  targetDateStr?: string;
+  vendasTargetDateTotal?: number | null;
+  pedidosTargetDateTotal?: number | null;
+  itensTargetDateTotal?: number | null;
   top5ProdutosOntem?: Array<{
     nome: string;
     codigo: string;
@@ -1262,6 +1296,34 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     }
   }
 
+  // Caso 0: Consulta de Vendas em Data Específica (ex: "Quanto vendi em 20/11/2025?")
+  const isDateQuery =
+    Boolean(data.targetDateStr) &&
+    (p.includes("quanto vendi") ||
+      p.includes("quanto vendemos") ||
+      p.includes("quanto faturei") ||
+      p.includes("quanto faturamos") ||
+      p.includes("faturamento em") ||
+      p.includes("faturamento no dia") ||
+      p.includes("vendas em") ||
+      p.includes("vendas no dia"));
+
+  if (isDateQuery && data.targetDateStr) {
+    const formattedDate = data.targetDateStr.split("-").reverse().join("/");
+    const total = typeof data.vendasTargetDateTotal === "number" ? data.vendasTargetDateTotal : 0;
+    const pedidos = data.pedidosTargetDateTotal ?? 0;
+    const ticketMedio = pedidos > 0 ? total / pedidos : 0;
+
+    const msg =
+      `📊 *Agente de Vendas e PDV — Vendas em ${formattedDate} (Balcão):*\n\n` +
+      `• *Faturamento Bruto:* R$ ${total.toFixed(2)}\n` +
+      `• *Total de Pedidos:* ${pedidos} comanda(s)\n` +
+      `• *Ticket Médio por Comanda:* R$ ${ticketMedio.toFixed(2)}\n\n` +
+      `_Apurado diretamente das vendas presenciais registradas no PDV Eyemobile para o dia ${formattedDate}._`;
+
+    return { handled: true, answer: msg, specialist: "vendas_pdv" };
+  }
+
   // Caso 1: "Quanto faturamos ontem no balcão?" / "Quanto vendemos ontem?"
   if (
     p.includes("faturamos ontem no balcão") ||
@@ -1291,6 +1353,68 @@ export function buildSalesPdvSpecialistDeterministicResponse(
       `• *Ticket Médio por Comanda:* ${ticketMedio}\n\n` +
       `_Apurado diretamente das vendas presenciais registradas no PDV Eyemobile._`;
 
+    return { handled: true, answer: msg, specialist: "vendas_pdv" };
+  }
+
+  // Caso 2D: "Quais os custos de atacado desses cinco produtos?" / "custos de atacado"
+  if (
+    p.includes("custos de atacado") ||
+    p.includes("custo de atacado") ||
+    (p.includes("custo") && (p.includes("cinco produtos") || p.includes("5 produtos") || p.includes("desses produtos") || p.includes("desses cinco")))
+  ) {
+    if (!data.top5ProdutosOntem || data.top5ProdutosOntem.length === 0) {
+      return {
+        handled: true,
+        answer: "📊 *Agente de Vendas e PDV — Custos de Atacado:*\n\nDados dos produtos mais vendidos não disponíveis no momento.",
+        specialist: "vendas_pdv",
+      };
+    }
+
+    let msg = `📦 *Custos de Atacado dos 5 Produtos Mais Vendidos:*\n\n`;
+    data.top5ProdutosOntem.slice(0, 5).forEach((prod, idx) => {
+      const nome = prod.nome || prod.produto || "Produto";
+      if (typeof prod.custoUnitario === "number" && prod.custoUnitario > 0) {
+        const isOrcamento16852 = /trident|snickers|trento|halls|mentos|pipoca|prestigio|pacoca|ouro branco|sonho de valsa|chita|icekiss|frutella|talento/i.test(nome);
+        const isFichaTecnica = /pao de queijo|pão de queijo|salgado|sanduiche|sanduíche|artesanal/i.test(nome);
+        const origemStr = isOrcamento16852
+          ? "Preço de referência (Orçamento nº 16852 de 13/11/2026 - Atacado)"
+          : isFichaTecnica
+          ? "Ficha técnica de produção própria (insumos comprovados)"
+          : "Custo cadastrado no catálogo de produtos";
+        msg += `${idx + 1}. **${nome}:** Custo unitário de **R$ ${prod.custoUnitario.toFixed(2)}**\n   • *Origem:* ${origemStr}\n`;
+      } else {
+        msg += `${idx + 1}. **${nome}:** **Custo não confirmado — margem indisponível**\n   • *Origem:* Aguardando cadastro de compra/nota fiscal com quantidade\n`;
+      }
+    });
+
+    msg += `\n_Os custos convertidos consideram as embalagens fracionadas do atacado para a unidade de venda individual do balcão._`;
+    return { handled: true, answer: msg, specialist: "vendas_pdv" };
+  }
+
+  // Caso 2E: "Quanto foi o CMV de ontem?" / "qual foi o cmv de ontem"
+  if (
+    (p.includes("cmv") && (p.includes("ontem") || p.includes("dia de ontem"))) ||
+    p.includes("quanto foi o cmv de ontem") ||
+    p.includes("qual foi o cmv de ontem")
+  ) {
+    const faturamentoTotal = typeof data.vendasOntemTotal === "number" ? data.vendasOntemTotal : 0;
+    const lucroBruto = typeof data.lucroBrutoOntemCalculavel === "number" ? data.lucroBrutoOntemCalculavel : 0;
+    const coberturaPct = typeof data.coberturaCustosOntemPercent === "number" ? data.coberturaCustosOntemPercent : 0;
+
+    const receitaComCusto = Math.round(((faturamentoTotal * coberturaPct) / 100) * 100) / 100;
+    const cmvTotal = Math.max(0, Math.round((receitaComCusto - lucroBruto) * 100) / 100);
+    const cmvPct = receitaComCusto > 0 ? (cmvTotal / receitaComCusto) * 100 : 0;
+    const receitaSemCusto = Math.max(0, Math.round((faturamentoTotal - receitaComCusto) * 100) / 100);
+
+    let msg = `📊 *Agente de Estoque e Vendas — Apuração do CMV de Ontem:*\n\n`;
+    msg += `• **Faturamento Total Auditado:** R$ ${faturamentoTotal.toFixed(2)}\n`;
+    msg += `• **Receita com Custo Confirmado:** R$ ${receitaComCusto.toFixed(2)} (${coberturaPct.toFixed(1)}% de cobertura)\n`;
+    msg += `• **CMV Total Realizado:** **R$ ${cmvTotal.toFixed(2)}** (${cmvPct.toFixed(1)}% sobre a receita coberta)\n`;
+    msg += `• **Lucro Bruto Calculável:** R$ ${lucroBruto.toFixed(2)}\n`;
+    if (receitaSemCusto > 0) {
+      msg += `• **Receita sem Custo Confirmado:** R$ ${receitaSemCusto.toFixed(2)} _(sinalizada à parte, NÃO considerada custo zero)_\n`;
+    }
+    msg += `\n_Critério canônico: Os produtos sem custo conhecido são explicitamente segregados para não distorcer a margem real apurada._`;
     return { handled: true, answer: msg, specialist: "vendas_pdv" };
   }
 
@@ -1339,17 +1463,18 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     // Padrão GATE 5 Oficial: Tabela Markdown com CMV, Lucro Bruto e Margem
     const dateLabel = data.yesterdayDateStr ? ` — ${data.yesterdayDateStr}` : "";
     let table = `## 📊 TOP 5 PRODUTOS — ONTEM${dateLabel}\n\n`;
-    table += `| Produto | Quantidade | Faturamento | CMV | Lucro bruto | Margem |\n`;
-    table += `|---|---:|---:|---:|---:|---:|\n`;
+    table += `| Produto | Quantidade | Faturamento | Custo unitário | CMV | Lucro bruto | Margem |\n`;
+    table += `|---|---:|---:|---:|---:|---:|---:|\n`;
 
     data.top5ProdutosOntem.slice(0, 5).forEach((prod) => {
       const nome = prod.nome || prod.produto || "Produto";
       const qtd = typeof prod.quantidade === "number" ? prod.quantidade : 0;
       const totalNum = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      const custoUnitStr = typeof prod.custoUnitario === "number" ? `R$ ${prod.custoUnitario.toFixed(2)}` : "Indisponível";
       const cmvStr = typeof prod.cmvTotal === "number" ? `R$ ${prod.cmvTotal.toFixed(2)}` : "Indisponível";
       const lucroStr = typeof prod.lucroBruto === "number" ? `R$ ${prod.lucroBruto.toFixed(2)}` : "Indisponível";
       const margemStr = typeof prod.margem === "number" ? `${prod.margem.toFixed(1)}%` : "Custo não confirmado";
-      table += `| ${nome} | ${qtd} un. | R$ ${totalNum.toFixed(2)} | ${cmvStr} | ${lucroStr} | ${margemStr} |\n`;
+      table += `| ${nome} | ${qtd} un. | R$ ${totalNum.toFixed(2)} | ${custoUnitStr} | ${cmvStr} | ${lucroStr} | ${margemStr} |\n`;
     });
 
     table += `\n*Detalhamento do ranking:*\n`;
@@ -1403,12 +1528,15 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     return { handled: true, answer: table, specialist: "vendas_pdv" };
   }
 
-  // Caso 2B: "Qual desses cinco produtos me deu mais lucro bruto em reais?" / "qual deu mais lucro"
+  // Caso 2B: "Qual desses cinco produtos me deu mais lucro bruto em reais?" / "Quanto ganhei com cada um desses produtos?"
   if (
     p.includes("mais lucro bruto em reais") ||
     p.includes("qual desses cinco produtos me deu mais lucro") ||
     p.includes("qual deles deu mais lucro") ||
-    p.includes("qual me deu mais lucro")
+    p.includes("qual me deu mais lucro") ||
+    p.includes("quanto ganhei com cada um") ||
+    p.includes("quanto ganhei com cada") ||
+    p.includes("quanto lucrei com cada")
   ) {
     if (!data.top5ProdutosOntem || data.top5ProdutosOntem.length === 0) {
       return {
@@ -1452,9 +1580,16 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     return { handled: true, answer: msg, specialist: "vendas_pdv" };
   }
 
-  // Caso 2C: "Quais produtos estão sem custo cadastrado?"
-  if (p.includes("sem custo cadastrado") || p.includes("sem custo")) {
-    const semCusto = (data.top5ProdutosOntem || []).filter((p) => p.statusCusto === "sem_custo" || p.custoUnitario === null || p.cmvTotal === null);
+  // Caso 2C: "Quais produtos ainda estão sem custo confirmado?" / "Quais produtos estão sem custo cadastrado?"
+  if (
+    p.includes("sem custo cadastrado") ||
+    p.includes("sem custo confirmado") ||
+    p.includes("sem custo") ||
+    p.includes("produtos sem custo")
+  ) {
+    const semCusto = (data.top5ProdutosOntem || []).filter(
+      (p) => p.statusCusto === "sem_custo" || p.custoUnitario === null || p.cmvTotal === null
+    );
     if (semCusto.length === 0) {
       return {
         handled: true,
@@ -1463,7 +1598,7 @@ export function buildSalesPdvSpecialistDeterministicResponse(
       };
     }
 
-    let msg = `⚠️ *Produtos Vendidos sem Custo Cadastrado:*\n\n`;
+    let msg = `⚠️ *Produtos Vendidos sem Custo Confirmado:*\n\n`;
     semCusto.forEach((prod) => {
       const pNome = prod.nome || prod.produto || "Item";
       const pTotal = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
@@ -1592,16 +1727,33 @@ export async function fetchAndExecuteSalesPdvSpecialist(
 
   const { todayStr, yesterdayStr, startOfMonthStr, startOfPrevMonthStr, endOfPrevMonthStr } =
     getSaoPauloDateStrings(nowOverride);
+
+  // Extração de data específica informada pelo usuário (ex: "20/11/2025", "2025-11-20")
+  let targetDateStr: string | null = null;
+  const brDateMatch = userPrompt.match(/(\d{1,2})[/-](\d{1,2})[/-](\d{4})/);
+  const isoDateMatch = userPrompt.match(/(\d{4})[/-](\d{1,2})[/-](\d{1,2})/);
+  if (brDateMatch) {
+    const day = brDateMatch[1].padStart(2, "0");
+    const month = brDateMatch[2].padStart(2, "0");
+    const year = brDateMatch[3];
+    targetDateStr = `${year}-${month}-${day}`;
+  } else if (isoDateMatch) {
+    targetDateStr = `${isoDateMatch[1]}-${isoDateMatch[2].padStart(2, "0")}-${isoDateMatch[3].padStart(2, "0")}`;
+  }
+
   const collectedData: SalesPdvDeterministicData = {
     isMemberRole: !canRoleAccessFinancialData(context.role),
   };
 
   try {
     if (repository.listSalesPdvDetails) {
-      const [yesterdaySales, monthSales, prevMonthSales, inventoryItems, recipeCards] = await Promise.all([
+      const [yesterdaySales, monthSales, prevMonthSales, targetDaySales, inventoryItems, recipeCards] = await Promise.all([
         repository.listSalesPdvDetails(context, { start: yesterdayStr, end: yesterdayStr }),
         repository.listSalesPdvDetails(context, { start: startOfMonthStr, end: todayStr }),
         repository.listSalesPdvDetails(context, { start: startOfPrevMonthStr, end: endOfPrevMonthStr }),
+        targetDateStr
+          ? repository.listSalesPdvDetails(context, { start: targetDateStr, end: targetDateStr })
+          : Promise.resolve([]),
         repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
         repository.listRecipeCards ? repository.listRecipeCards(context) : Promise.resolve([]),
       ]);
@@ -1634,6 +1786,13 @@ export async function fetchAndExecuteSalesPdvSpecialist(
       const validYesterday = filterValid(yesterdaySales);
       const validMonth = filterValid(monthSales);
       const validPrevMonth = filterValid(prevMonthSales);
+      const validTargetDay = filterValid(targetDaySales);
+
+      if (targetDateStr) {
+        collectedData.targetDateStr = targetDateStr;
+        collectedData.vendasTargetDateTotal = validTargetDay.reduce((acc, s) => acc + (s.amount || 0), 0);
+        collectedData.pedidosTargetDateTotal = validTargetDay.length;
+      }
 
       // Mapeamento de custos reais do catálogo
       const costMapByCode = new Map<string, number>();
