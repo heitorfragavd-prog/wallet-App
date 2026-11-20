@@ -14,17 +14,17 @@ const mockDelete = vi.fn();
 vi.mock('@/integrations/supabase/client', () => ({
   supabase: {
     from: vi.fn((table: string) => ({
-      select: (...args: any[]) => {
+      select: (...args: unknown[]) => {
         mockSelect(table, ...args);
         return {
-          eq: (...eqArgs: any[]) => {
+          eq: (...eqArgs: unknown[]) => {
             mockEq(table, ...eqArgs);
             return {
-              order: (...orderArgs: any[]) => {
+              order: (...orderArgs: unknown[]) => {
                 mockOrder(table, ...orderArgs);
                 return Promise.resolve({ data: [], error: null });
               },
-              then: (resolve: any) => resolve({ data: [], error: null }),
+              then: (resolve: (value: unknown) => void) => resolve({ data: [], error: null }),
             };
           },
         };
