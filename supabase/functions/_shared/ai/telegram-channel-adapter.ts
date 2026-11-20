@@ -53,7 +53,20 @@ import {
   processFechamentoGrupoTurn,
 } from "./group-governance.ts";
 import { DEFAULT_SUMMARY_MODEL } from "./model-policy.ts";
-import { FINANCIAL_AGENT_SYSTEM_PROMPT, type LlmMessage } from "./orchestrator-core.ts";
+import {
+  FINANCIAL_AGENT_SYSTEM_PROMPT,
+  WALLET_CEO_SYSTEM_PROMPT,
+  type LlmMessage,
+} from "./orchestrator-core.ts";
+import {
+  routeUserQueryToSpecialists,
+  fetchAndExecuteSpecialistTurn,
+  fetchAndExecuteCoordinatedCeoSnapshot,
+  type SpecialistRoutingPlan,
+  type CoordinatedCeoSnapshot,
+} from "./specialist-router.ts";
+import { SPECIALIST_AGENTS_REGISTRY } from "./specialist-registry.ts";
+import { canRoleAccessCeoBrain, canRoleAccessFinancialData } from "./auth.ts";
 
 // ─── TIPOS DO TELEGRAM ────────────────────────────────────────────────────────
 
@@ -142,6 +155,7 @@ export interface ResolvedTelegramIdentity {
   userId?: string;
   workspaceId?: string;
   userRole?: string; // 'owner' | 'admin' | 'member' | 'viewer'
+  isOwner?: boolean;
   userName?: string;
   grupo?: ResolvedGroupContext;
   error?: string;
@@ -875,6 +889,7 @@ export async function resolveTelegramIdentity(
       userId: matchedUserId,
       workspaceId: matchedWorkspaceId,
       userRole: role,
+      isOwner: isWorkspaceOwner,
       userName: userName || undefined,
       grupo: resolvedGroupContext,
     };
@@ -956,12 +971,80 @@ export async function resolveTelegramIdentity(
 
   // Converte access_level para papéis RBAC canônicos
   let resolvedRole = "member";
-  if (matchedAccessLevel === "owner" || matchedAccessLevel === "socio") {
-    resolvedRole = "owner";
-  } else if (matchedAccessLevel === "admin") {
-    resolvedRole = "admin";
-  } else if (matchedAccessLevel === "viewer" || matchedAccessLevel === "leitor") {
-    resolvedRole = "viewer";
+  if (matchedAccessLevel) {
+    const norm = String(matchedAccessLevel).toLowerCase().trim();
+    if (norm === "owner" || norm === "socio" || norm === "proprietario") {
+      resolvedRole = "owner";
+    } else if (norm === "admin" || norm === "administrador" || norm === "gestor") {
+      resolvedRole = "admin";
+    } else if (norm === "financeiro") {
+      resolvedRole = "financeiro";
+    } else if (norm === "viewer" || norm === "leitor") {
+      resolvedRole = "viewer";
+    } else {
+      resolvedRole = "member";
+    }
+  }
+
+  // 4.3 Verificação de RBAC Real no Banco (workspaces e workspace_members)
+  let isWorkspaceOwner = false;
+  if (matchedWorkspaceId && matchedUserId) {
+    try {
+      const ownedRes = await supabase
+        .from("workspaces")
+        .select("id")
+        .eq("id", matchedWorkspaceId)
+        .eq("user_id", matchedUserId);
+
+      const ownedList = Array.isArray(ownedRes?.data)
+        ? ownedRes.data
+        : ownedRes?.data
+        ? [ownedRes.data]
+        : [];
+      isWorkspaceOwner = ownedList.some((w: any) => w?.id === matchedWorkspaceId);
+
+      const memberRes = await supabase
+        .from("workspace_members")
+        .select("role, active")
+        .eq("workspace_id", matchedWorkspaceId)
+        .eq("user_id", matchedUserId);
+
+      const memberList = Array.isArray(memberRes?.data)
+        ? memberRes.data
+        : memberRes?.data
+        ? [memberRes.data]
+        : [];
+      const activeMember = memberList.find(
+        (m: any) => m?.active !== false && m?.status !== "inactive"
+      );
+
+      // Se há checagem de banco explícita e o usuário não é dono nem membro ativo nem possui mapping pré-autorizado
+      if (ownedRes?.data !== undefined && memberRes?.data !== undefined) {
+        if (!isWorkspaceOwner && !activeMember && !matchedAccessLevel) {
+          return {
+            authorized: false,
+            errorCode: "FORBIDDEN",
+            error: "Você não possui permissão de acesso ao workspace selecionado.",
+          };
+        }
+      }
+
+      // Se o usuário não tinha access_level explícito em mapping, deriva de workspace_members ou workspaces
+      if (!matchedAccessLevel) {
+        if (isWorkspaceOwner) {
+          resolvedRole = "owner";
+        } else if (activeMember?.role) {
+          const norm = String(activeMember.role).toLowerCase().trim();
+          if (norm === "owner" || norm === "proprietario") resolvedRole = "owner";
+          else if (norm === "admin" || norm === "administrador" || norm === "gestor") resolvedRole = "admin";
+          else if (norm === "financeiro") resolvedRole = "financeiro";
+          else if (norm === "viewer" || norm === "leitor") resolvedRole = "viewer";
+          else resolvedRole = "member";
+        }
+      }
+    } catch {
+      // Falha não-bloqueante na verificação secundária
+    }
   }
 
   return {
@@ -969,6 +1052,7 @@ export async function resolveTelegramIdentity(
     userId: matchedUserId,
     workspaceId: matchedWorkspaceId,
     userRole: resolvedRole,
+    isOwner: isWorkspaceOwner || resolvedRole === "owner",
     userName: userName || undefined,
   };
 }
@@ -1641,13 +1725,23 @@ export async function handleTelegramTextMessage(
       ? `tg_${crypto.randomUUID()}`
       : `tg_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
+  const isGroup = params.isGroup ?? (params.chatId ? Number(params.chatId) < 0 : false);
+  const isExecutiveUser = canRoleAccessCeoBrain(identity.userRole, {
+    isOwner: identity.isOwner ?? (identity.userRole === "owner"),
+  });
+  const targetAgentType: "ceo" | "operational" = (!isGroup && !identity.grupo && isExecutiveUser)
+    ? "ceo"
+    : "operational";
+
   const context: AiExecutionContext = {
     userId: identity.userId,
     workspaceId: identity.workspaceId,
+    role: identity.userRole,
     userRole: identity.userRole,
+    isOwner: identity.isOwner ?? (identity.userRole === "owner"),
     channel: "telegram",
     correlationId: params.correlationId || generatedTgCorrelationId,
-  };
+  } as unknown as AiExecutionContext;
 
   const repo = deps.repoFactory(context);
   const operationsAgent =
@@ -1664,17 +1758,23 @@ export async function handleTelegramTextMessage(
     : fullCatalog;
   const runner = deps.runnerFactory();
 
-  const isGroup = params.isGroup ?? (params.chatId ? Number(params.chatId) < 0 : false);
-
   let conversationId: string | undefined;
   let normalizedPrompt = text.trim();
-  if (normalizedPrompt.toLowerCase() === "/ceo" || normalizedPrompt.toLowerCase().startsWith("/ceo ")) {
+  const lowerPrompt = normalizedPrompt.toLowerCase();
+  const isCeoCommand = lowerPrompt === "/ceo" || lowerPrompt.startsWith("/ceo ");
+
+  if (isCeoCommand) {
     if (isGroup || identity.grupo) {
       return {
         text: "🔒 <b>Acesso Restrito:</b> O Cérebro Executivo (Wallet CEO) é de uso estritamente privado e individual. Por diretrizes de segurança da empresa, resumos estratégicos e DREs confidenciais não estão disponíveis em grupos corporativos.",
       };
     }
-    if (normalizedPrompt.toLowerCase() === "/ceo") {
+    if (!isExecutiveUser) {
+      return {
+        text: "🔒 <b>Acesso Restrito:</b> Apenas o proprietário e administradores executivos autorizados possuem acesso ao resumo executivo do Wallet CEO.",
+      };
+    }
+    if (lowerPrompt === "/ceo") {
       normalizedPrompt = "Apresente o resumo executivo oficial do Wallet CEO 2.0 para a Rodo Point com faturamento, despesas, margem, ações prioritárias de hoje e status dos departamentos.";
     } else {
       normalizedPrompt = normalizedPrompt.slice(5).trim();
@@ -1682,7 +1782,6 @@ export async function handleTelegramTextMessage(
   }
 
   // ─── Comando /agenda e /compromissos (Etapa 12 Gate 6) ───
-  const lowerPrompt = normalizedPrompt.toLowerCase();
   if (lowerPrompt === "/agenda" || lowerPrompt.startsWith("/agenda ") || lowerPrompt === "/compromissos") {
     if (isGroup || identity.grupo) {
       return {
@@ -1736,9 +1835,100 @@ export async function handleTelegramTextMessage(
     }
   }
 
-  const effectiveSystemPrompt = identity.grupo
+  // Integração com Especialistas e Coordenação do Wallet CEO para Chat Privado Executivo
+  let routingPlan: SpecialistRoutingPlan | undefined;
+  let coordinatedSnapshot: CoordinatedCeoSnapshot | null = null;
+  let effectiveSystemPrompt = identity.grupo
     ? buildGroupSystemPrompt(FINANCIAL_AGENT_SYSTEM_PROMPT, identity.grupo.tipoGrupo, identity.grupo.nomeGrupo)
-    : FINANCIAL_AGENT_SYSTEM_PROMPT;
+    : (targetAgentType === "ceo" ? WALLET_CEO_SYSTEM_PROMPT : FINANCIAL_AGENT_SYSTEM_PROMPT);
+
+  if (targetAgentType === "ceo" && !isGroup && !identity.grupo) {
+    routingPlan = routeUserQueryToSpecialists(normalizedPrompt);
+
+    // GATE 1 & 2: Execução Determinística dos Especialistas quando aplicável (Zero Custo de IA)
+    if (routingPlan.isDeterministicPossible) {
+      try {
+        const detResult = await fetchAndExecuteSpecialistTurn(
+          normalizedPrompt,
+          context,
+          repo,
+        );
+        if (detResult.handled && detResult.answer) {
+          if (deps.conversationRepo) {
+            try {
+              const conv = deps.conversationRepo.getOrCreateActiveConversation
+                ? await deps.conversationRepo.getOrCreateActiveConversation({
+                    workspaceId: identity.workspaceId,
+                    userId: identity.userId,
+                    channel: "telegram",
+                    agentType: "ceo",
+                    externalChatId: String(params.chatId),
+                    isGroup: false,
+                    maxInactiveHours: 4,
+                    title: `Conversa com CEO (Telegram ${params.chatId})`,
+                  })
+                : await deps.conversationRepo.createConversation({
+                    workspaceId: identity.workspaceId,
+                    userId: identity.userId,
+                    title: `Conversa com CEO (Telegram ${params.chatId})`,
+                    channel: "telegram",
+                    agentType: "ceo",
+                    externalChatId: String(params.chatId),
+                    isGroup: false,
+                    isShared: false,
+                  });
+              conversationId = conv.id;
+              await deps.conversationRepo.appendMessage({
+                conversationId,
+                workspaceId: identity.workspaceId,
+                userId: identity.userId,
+                role: "user",
+                content: text,
+                channel: "telegram",
+                externalMessageId: params.messageId ? String(params.messageId) : undefined,
+                ...(identity.userName ? { senderName: identity.userName } : {}),
+                senderRole: identity.userRole,
+              });
+              await deps.conversationRepo.appendMessage({
+                conversationId,
+                workspaceId: identity.workspaceId,
+                userId: identity.userId,
+                role: "assistant",
+                content: detResult.answer,
+                tokensCount: 0,
+                channel: "telegram",
+              });
+            } catch (convErr) {
+              console.warn("[telegram-adapter] Erro ao persistir memória canônica determinística:", convErr);
+            }
+          }
+          return {
+            text: markdownToTelegramHtml(detResult.answer),
+          };
+        }
+      } catch (detErr) {
+        console.warn("[telegram-adapter] Erro na execução determinística do especialista; prosseguindo para o LLM:", detErr);
+      }
+    }
+
+    if (routingPlan.coordinatingCeo) {
+      try {
+        coordinatedSnapshot = await fetchAndExecuteCoordinatedCeoSnapshot(
+          normalizedPrompt,
+          context,
+          repo,
+          routingPlan,
+        );
+        effectiveSystemPrompt += `\n\n${coordinatedSnapshot.contextBrief}`;
+      } catch (coordErr) {
+        console.warn("[telegram-adapter] Erro na coleta do snapshot coordenado:", coordErr);
+      }
+    } else if (routingPlan.primarySpecialist && SPECIALIST_AGENTS_REGISTRY[routingPlan.primarySpecialist]) {
+      const spec = SPECIALIST_AGENTS_REGISTRY[routingPlan.primarySpecialist];
+      effectiveSystemPrompt += `\n\n[APOIO ESPECIALIZADO: ${spec.name} — ${spec.department}]\n${spec.systemPromptSnippet}`;
+    }
+  }
+
   let turnMessages: LlmMessage[] = [{ role: "user", content: normalizedPrompt }];
 
   if (deps.conversationRepo) {
@@ -1774,27 +1964,40 @@ export async function handleTelegramTextMessage(
               workspaceId: identity.workspaceId,
               userId: identity.userId,
               channel: "telegram",
-              agentType: "operational",
+              agentType: targetAgentType,
               externalChatId: String(params.chatId),
               isGroup,
               maxInactiveHours: 4,
               title: isGroup
                 ? identity.grupo?.nomeGrupo || `Grupo Telegram ${params.chatId}`
-                : `Telegram Chat ${params.chatId}`,
+                : (targetAgentType === "ceo" ? `Conversa com CEO (Telegram ${params.chatId})` : `Telegram Chat ${params.chatId}`),
             })
           : await deps.conversationRepo.createConversation({
               workspaceId: identity.workspaceId,
               userId: identity.userId,
               title: isGroup
                 ? identity.grupo?.nomeGrupo || `Grupo Telegram ${params.chatId}`
-                : `Telegram Chat ${params.chatId}`,
+                : (targetAgentType === "ceo" ? `Conversa com CEO (Telegram ${params.chatId})` : `Telegram Chat ${params.chatId}`),
               channel: "telegram",
-              agentType: "operational",
+              agentType: targetAgentType,
               externalChatId: String(params.chatId),
               isGroup,
               isShared: isGroup,
             });
       conversationId = conv.id;
+
+      if (conv.agent_type !== targetAgentType && deps.supabase && !isGroup && !identity.grupo) {
+        try {
+          await deps.supabase
+            .from("wallet_ai_conversations")
+            .update({ agent_type: targetAgentType, updated_at: new Date().toISOString() })
+            .eq("id", conv.id)
+            .eq("workspace_id", identity.workspaceId);
+          conv.agent_type = targetAgentType;
+        } catch {
+          // não-bloqueante
+        }
+      }
 
       // Fluxo determinístico prioritário para o Grupo Fechamento da Loja ao enviar valores em texto
       if (identity.grupo?.tipoGrupo === "fechamento" && deps.supabase) {
@@ -1878,13 +2081,51 @@ export async function handleTelegramTextMessage(
     }
   }
 
-  const turnResult = await runOrchestratorTurn(
-    turnMessages,
-    context,
-    catalog,
-    runner,
-    identity.grupo ? { systemPromptOverride: effectiveSystemPrompt } : undefined,
-  );
+  let turnResult: Awaited<ReturnType<typeof runOrchestratorTurn>>;
+  try {
+    turnResult = await runOrchestratorTurn(
+      turnMessages,
+      context,
+      catalog,
+      runner,
+      { systemPromptOverride: effectiveSystemPrompt },
+    );
+  } catch (turnErr) {
+    if (coordinatedSnapshot?.deterministicFallbackAnswer) {
+      console.warn("[telegram-adapter] Falha no LLM; acionando fallback determinístico do CEO:", turnErr);
+      const fallbackText = coordinatedSnapshot.deterministicFallbackAnswer;
+      if (deps.conversationRepo && conversationId) {
+        try {
+          await deps.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            role: "user",
+            content: text,
+            channel: "telegram",
+            externalMessageId: params.messageId ? String(params.messageId) : undefined,
+            ...(identity.userName ? { senderName: identity.userName } : {}),
+            senderRole: identity.userRole,
+          });
+          await deps.conversationRepo.appendMessage({
+            conversationId,
+            workspaceId: identity.workspaceId,
+            userId: identity.userId,
+            role: "assistant",
+            content: fallbackText,
+            tokensCount: 0,
+            channel: "telegram",
+          });
+        } catch {
+          // não-bloqueante
+        }
+      }
+      return {
+        text: markdownToTelegramHtml(fallbackText),
+      };
+    }
+    throw turnErr;
+  }
 
   // Persistência das mensagens na memória canônica se repositório ativo
   if (deps.conversationRepo && conversationId) {
@@ -2122,7 +2363,9 @@ export async function handleTelegramCallback(
   const context: AiExecutionContext = {
     userId: identity.userId,
     workspaceId: identity.workspaceId,
+    role: identity.userRole,
     userRole: identity.userRole,
+    isOwner: identity.isOwner ?? (identity.userRole === "owner"),
     channel: "telegram",
     correlationId: `cb_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   };
@@ -2576,7 +2819,9 @@ export async function handleTelegramDocument(
   const context: AiExecutionContext = {
     userId: identity.userId,
     workspaceId: identity.workspaceId,
+    role: identity.userRole,
     userRole: identity.userRole,
+    isOwner: identity.isOwner ?? (identity.userRole === "owner"),
     channel: "telegram",
     correlationId: `tg_doc_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`,
   };
