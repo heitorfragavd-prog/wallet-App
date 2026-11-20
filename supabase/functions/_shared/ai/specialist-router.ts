@@ -109,6 +109,29 @@ export function getSaoPauloDateStrings(referenceDate = new Date()) {
 export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRoutingPlan {
   const p = userPrompt.toLowerCase().trim();
 
+  // 0. Resumo Executivo Oficial do Wallet CEO
+  const isExecutiveOverview =
+    p === "/ceo" ||
+    p.startsWith("/ceo ") ||
+    p.includes("resumo executivo") ||
+    p.includes("panorama executivo") ||
+    p.includes("relatorio executivo") ||
+    p.includes("relatório executivo") ||
+    p.includes("wallet ceo");
+
+  if (isExecutiveOverview) {
+    return {
+      primarySpecialist: "financeiro",
+      coordinatingCeo: true,
+      contributingSpecialists: ["vendas_pdv", "estoque", "financeiro", "operacoes"],
+      complexityLevel: 3,
+      model: "gemini-2.5-flash",
+      isDeterministicPossible: false,
+      rationale:
+        "Consulta de Resumo Executivo Oficial: Wallet CEO coordena Vendas/PDV, Estoque, Financeiro e Operações.",
+    };
+  }
+
   // 1. Diagnóstico Executivo Multidepartamental (Coordenação pelo Wallet CEO)
   const isGrowthWithoutMarginLoss =
     p.includes("vender mais sem perder margem") ||
@@ -226,6 +249,10 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
 
   // 3. Especialista de Vendas e PDV
   const isVendasQuery =
+    p.includes("quanto vendemos ontem") ||
+    p.includes("quanto vendi ontem") ||
+    p.includes("vendas de ontem") ||
+    p.includes("vendas ontem") ||
     p.includes("ticket médio") ||
     p.includes("ticket medio") ||
     p.includes("mais vendido") ||
@@ -266,7 +293,7 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
     p.includes("qual foi o cmv") ||
     p.includes("sem custo confirmado") ||
     p.includes("sem custo cadastrado") ||
-    /\b(quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)|vendas) (em|no dia) \d{1,2}[/-]\d{1,2}/.test(p);
+    /\b(quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)|vendas|faturamento) (em|no dia|do dia|de) \d{1,2}[/-]\d{1,2}/.test(p);
 
   if (isVendasQuery) {
     const isVendasDeterministic =
@@ -306,7 +333,7 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
       p.includes("divisão por forma de pagamento") ||
       p.includes("divisao por forma de pagamento") ||
       p.includes("formas de pagamento") ||
-      /\b(quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)|vendas) (em|no dia) \d{1,2}[/-]\d{1,2}/.test(p);
+      /\b(quanto (vendi|vendeu|vendemos|faturei|faturou|faturamos)|vendas|faturamento) (em|no dia|do dia|de) \d{1,2}[/-]\d{1,2}/.test(p);
 
     return {
       primarySpecialist: "vendas_pdv",
@@ -1305,8 +1332,11 @@ export function buildSalesPdvSpecialistDeterministicResponse(
       p.includes("quanto faturamos") ||
       p.includes("faturamento em") ||
       p.includes("faturamento no dia") ||
+      p.includes("faturamento do dia") ||
+      p.includes("faturamento de") ||
       p.includes("vendas em") ||
-      p.includes("vendas no dia"));
+      p.includes("vendas no dia") ||
+      p.includes("vendas do dia"));
 
   if (isDateQuery && data.targetDateStr) {
     const formattedDate = data.targetDateStr.split("-").reverse().join("/");
@@ -3971,13 +4001,13 @@ async function collectSingleSpecialistContribution(
     const canSeeFinancial = canRoleAccessFinancialData(context.role);
 
     if (specialistId === "financeiro") {
-      if (!canSeeFinancial || context.role !== "owner") {
+      if (!canSeeFinancial || (context.role !== "owner" && context.role !== "admin" && !context.isOwner)) {
         return {
           specialist: specialistId,
           name,
           status: "denied",
           durationMs: Date.now() - startedAt,
-          summary: "Dados financeiros restritos ao proprietário.",
+          summary: "Dados financeiros restritos ao proprietário e administradores executivos.",
         };
       }
       const [revenues, expenses, balances] = await Promise.all([
