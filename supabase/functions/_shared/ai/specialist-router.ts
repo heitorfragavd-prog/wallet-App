@@ -254,10 +254,22 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
       p.includes("quanto faturei ontem") ||
       p.includes("faturamento de ontem") ||
       p.includes("vendas de ontem") ||
+      p.includes("quanto vendemos ontem") ||
+      p.includes("quanto vendi ontem") ||
+      p.includes("5 produtos") ||
+      p.includes("cinco produtos") ||
       p.includes("5 produtos mais vendidos") ||
       p.includes("produtos mais vendidos") ||
+      p.includes("produtos que mais vendi") ||
+      p.includes("produtos que mais venderam") ||
       p.includes("mais vendido ontem") ||
       p.includes("mais vendidos ontem") ||
+      p.includes("mais vendi") ||
+      p.includes("mais vendemos") ||
+      p.includes("qual me deu mais lucro") ||
+      p.includes("mais lucro bruto em reais") ||
+      p.includes("margem de lucro de cada um") ||
+      p.includes("sem custo cadastrado") ||
       p.includes("horario de pico") ||
       p.includes("horário de pico") ||
       p.includes("mais movimento ontem") ||
@@ -1193,12 +1205,28 @@ export async function fetchAndExecuteFiscalSpecialist(
 export interface SalesPdvDeterministicData {
   vendasOntemTotal?: number | null;
   pedidosOntemTotal?: number | null;
-  top5ProdutosOntem?: Array<{ nome: string; quantidade: number; total: number }> | null;
+  itensOntemTotal?: number | null;
+  lucroBrutoOntemCalculavel?: number | null;
+  coberturaCustosOntemPercent?: number | null;
+  produtosSemCustoOntemQtd?: number | null;
+  yesterdayDateStr?: string;
+  top5ProdutosOntem?: Array<{
+    nome: string;
+    codigo: string;
+    quantidade: number;
+    total: number;
+    custoUnitario: number | null;
+    cmvTotal: number | null;
+    lucroBruto: number | null;
+    margem: number | null;
+    statusCusto: string;
+  }> | null;
   horarioPicoOntem?: { faixa: string; turnos?: string; totalVendas: number; quantidadePedidos: number } | null;
   faturamentoMesAtual?: number | null;
   faturamentoMesAnterior?: number | null;
   variacaoMesPercentual?: number | null;
   divisaoFormasPagamento?: Array<{ metodo: string; valor: number; percentual: number }> | null;
+  isMemberRole?: boolean;
 }
 
 export function buildSalesPdvSpecialistDeterministicResponse(
@@ -1219,7 +1247,9 @@ export function buildSalesPdvSpecialistDeterministicResponse(
       p.includes("mês anterior") ||
       p.includes("formas de pagamento") ||
       p.includes("divisao por forma de pagamento") ||
-      p.includes("divisão por forma de pagamento")
+      p.includes("divisão por forma de pagamento") ||
+      p.includes("margem") ||
+      p.includes("lucro")
     ) {
       return {
         handled: true,
@@ -1232,13 +1262,15 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     }
   }
 
-  // Caso 1: "Quanto faturamos ontem no balcão?"
+  // Caso 1: "Quanto faturamos ontem no balcão?" / "Quanto vendemos ontem?"
   if (
     p.includes("faturamos ontem no balcão") ||
     p.includes("faturamos ontem no balcao") ||
     p.includes("quanto faturei ontem") ||
     p.includes("faturamento de ontem") ||
-    p.includes("vendas de ontem")
+    p.includes("vendas de ontem") ||
+    p.includes("quanto vendemos ontem") ||
+    p.includes("quanto vendi ontem")
   ) {
     if (data.vendasOntemTotal === null || data.vendasOntemTotal === undefined) {
       return {
@@ -1262,8 +1294,21 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     return { handled: true, answer: msg, specialist: "vendas_pdv" };
   }
 
-  // Caso 2: "Quais foram os 5 produtos mais vendidos ontem?"
-  if (p.includes("5 produtos mais vendidos") || p.includes("produtos mais vendidos") || p.includes("mais vendido ontem") || p.includes("top 5")) {
+  // Caso 2: "Quais foram os 5 produtos mais vendidos ontem?" / "Lista para mim os 5 produtos que mais vendi e a margem de lucro"
+  const isTopProductsQuery =
+    p.includes("5 produtos") ||
+    p.includes("cinco produtos") ||
+    p.includes("produtos mais vendidos") ||
+    p.includes("produtos que mais vendi") ||
+    p.includes("produtos que mais venderam") ||
+    p.includes("mais vendido ontem") ||
+    p.includes("mais vendidos ontem") ||
+    p.includes("top 5") ||
+    p.includes("mais vendi") ||
+    p.includes("mais vendemos") ||
+    p.includes("margem de lucro de cada um");
+
+  if (isTopProductsQuery) {
     if (data.top5ProdutosOntem === null || data.top5ProdutosOntem === undefined) {
       return {
         handled: true,
@@ -1282,15 +1327,149 @@ export function buildSalesPdvSpecialistDeterministicResponse(
       };
     }
 
-    let msg = `📊 *Agente de Vendas e PDV — Top 5 Produtos Mais Vendidos Ontem:*\n\n`;
-    data.top5ProdutosOntem.slice(0, 5).forEach((prod, idx) => {
-      if (data.isMemberRole) {
+    if (data.isMemberRole) {
+      let msg = `📊 *Agente de Vendas e PDV — Top 5 Produtos Mais Vendidos Ontem:*\n\n`;
+      data.top5ProdutosOntem.slice(0, 5).forEach((prod, idx) => {
         msg += `${idx + 1}. *${prod.nome}* — ${prod.quantidade} unidade(s) vendida(s)\n`;
-      } else {
-        msg += `${idx + 1}. *${prod.nome}* — ${prod.quantidade} un. (Total: R$ ${prod.total.toFixed(2)})\n`;
-      }
+      });
+      msg += `\n_Ranking extraído dos itens discriminados nas comandas do caixa._`;
+      return { handled: true, answer: msg, specialist: "vendas_pdv" };
+    }
+
+    // Padrão GATE 5 Oficial: Tabela Markdown com CMV, Lucro Bruto e Margem
+    const dateLabel = data.yesterdayDateStr ? ` — ${data.yesterdayDateStr}` : "";
+    let table = `## 📊 TOP 5 PRODUTOS — ONTEM${dateLabel}\n\n`;
+    table += `| Produto | Quantidade | Faturamento | CMV | Lucro bruto | Margem |\n`;
+    table += `|---|---:|---:|---:|---:|---:|\n`;
+
+    data.top5ProdutosOntem.slice(0, 5).forEach((prod) => {
+      const nome = prod.nome || prod.produto || "Produto";
+      const qtd = typeof prod.quantidade === "number" ? prod.quantidade : 0;
+      const totalNum = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      const cmvStr = typeof prod.cmvTotal === "number" ? `R$ ${prod.cmvTotal.toFixed(2)}` : "Indisponível";
+      const lucroStr = typeof prod.lucroBruto === "number" ? `R$ ${prod.lucroBruto.toFixed(2)}` : "Indisponível";
+      const margemStr = typeof prod.margem === "number" ? `${prod.margem.toFixed(1)}%` : "Custo não confirmado";
+      table += `| ${nome} | ${qtd} un. | R$ ${totalNum.toFixed(2)} | ${cmvStr} | ${lucroStr} | ${margemStr} |\n`;
     });
-    msg += `\n_Ranking extraído dos itens discriminados nas comandas do caixa._`;
+
+    table += `\n*Detalhamento do ranking:*\n`;
+    data.top5ProdutosOntem.slice(0, 5).forEach((prod, idx) => {
+      const nome = prod.nome || prod.produto || "Produto";
+      const qtd = typeof prod.quantidade === "number" ? prod.quantidade : 0;
+      const totalNum = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      table += `${idx + 1}. *${nome}* — ${qtd} un. (Total: R$ ${totalNum.toFixed(2)})\n`;
+    });
+
+    const faturamentoTotalStr = typeof data.vendasOntemTotal === "number"
+      ? `R$ ${data.vendasOntemTotal.toFixed(2)}`
+      : "R$ 0,00";
+    const pedCount = data.pedidosOntemTotal ?? 0;
+    const totalItens = data.itensOntemTotal ?? data.top5ProdutosOntem.reduce((a, b) => a + (b.quantidade || 0), 0);
+    const lucroBrutoStr = typeof data.lucroBrutoOntemCalculavel === "number"
+      ? `R$ ${data.lucroBrutoOntemCalculavel.toFixed(2)}`
+      : "R$ 0,00";
+    const coberturaStr = typeof data.coberturaCustosOntemPercent === "number"
+      ? `${data.coberturaCustosOntemPercent.toFixed(1)}%`
+      : "0.0%";
+
+    table += `\n• **Faturamento total do período:** ${faturamentoTotalStr}\n`;
+    table += `• **Quantidade de transações:** ${pedCount} comandas\n`;
+    table += `• **Quantidade total de itens:** ${totalItens} unidades vendidas\n`;
+    table += `• **Lucro bruto calculável:** ${lucroBrutoStr}\n`;
+    table += `• **Cobertura dos custos conhecidos:** ${coberturaStr} da receita auditada\n`;
+    if (data.produtosSemCustoOntemQtd && data.produtosSemCustoOntemQtd > 0) {
+      table += `• **Produtos sem margem calculável:** ${data.produtosSemCustoOntemQtd} item(ns) aguardando cadastro de custo\n`;
+    }
+    table += `• **Data e horário da última sincronização:** ${new Date().toISOString().slice(0, 10)} (tempo real)\n`;
+    table += `• **Origem dos dados:** PDV Eyemobile (transações reais sincronizadas no workspace)\n\n`;
+
+    const maisLucrativoEmReais = [...data.top5ProdutosOntem]
+      .filter((p) => typeof p.lucroBruto === "number")
+      .sort((a, b) => (b.lucroBruto ?? 0) - (a.lucroBruto ?? 0))[0];
+
+    const maiorMargemPct = [...data.top5ProdutosOntem]
+      .filter((p) => typeof p.margem === "number")
+      .sort((a, b) => (b.margem ?? 0) - (a.margem ?? 0))[0];
+
+    let rec = "Mantenha o monitoramento diário da curva ABC de produtos.";
+    if (maisLucrativoEmReais && maiorMargemPct && typeof maisLucrativoEmReais.lucroBruto === "number" && typeof maiorMargemPct.margem === "number") {
+      const nomeLucro = maisLucrativoEmReais.nome || maisLucrativoEmReais.produto || "Item";
+      const nomeMargem = maiorMargemPct.nome || maiorMargemPct.produto || "Item";
+      rec = `O produto que gerou **maior lucro bruto em reais** foi o **${nomeLucro}** (R$ ${maisLucrativoEmReais.lucroBruto.toFixed(2)} de lucro bruto), enquanto o de **maior margem percentual** foi o **${nomeMargem}** (${maiorMargemPct.margem.toFixed(1)}%). Recomenda-se estimular a venda combinada (combos) entre o item de alto volume e o de alta margem para alavancar a rentabilidade global.`;
+    }
+
+    table += `💡 **Recomendação Executiva:** ${rec}`;
+
+    return { handled: true, answer: table, specialist: "vendas_pdv" };
+  }
+
+  // Caso 2B: "Qual desses cinco produtos me deu mais lucro bruto em reais?" / "qual deu mais lucro"
+  if (
+    p.includes("mais lucro bruto em reais") ||
+    p.includes("qual desses cinco produtos me deu mais lucro") ||
+    p.includes("qual deles deu mais lucro") ||
+    p.includes("qual me deu mais lucro")
+  ) {
+    if (!data.top5ProdutosOntem || data.top5ProdutosOntem.length === 0) {
+      return {
+        handled: true,
+        answer: "📊 *Agente de Vendas e PDV — Comparativo de Lucro:*\n\nDados de produtos não disponíveis para comparação.",
+        specialist: "vendas_pdv",
+      };
+    }
+
+    const comLucro = [...data.top5ProdutosOntem]
+      .filter((p) => typeof p.lucroBruto === "number")
+      .sort((a, b) => (b.lucroBruto ?? 0) - (a.lucroBruto ?? 0));
+
+    if (comLucro.length === 0) {
+      return {
+        handled: true,
+        answer: "📊 *Agente de Vendas e PDV — Comparativo de Lucro:*\n\nNenhum dos produtos possui custo cadastrado para apuração de lucro bruto.",
+        specialist: "vendas_pdv",
+      };
+    }
+
+    const campeao = comLucro[0];
+    const campeaoNome = campeao.nome || campeao.produto || "Item";
+    const campeaoTotal = typeof campeao.total === "number" ? campeao.total : (typeof campeao.faturamento === "number" ? campeao.faturamento : 0);
+    const campeaoMargemStr = typeof campeao.margem === "number" ? `${campeao.margem.toFixed(1)}%` : "N/D";
+    const campeaoLucroStr = typeof campeao.lucroBruto === "number" ? `R$ ${campeao.lucroBruto.toFixed(2)}` : "R$ 0,00";
+
+    let msg = `💰 *Comparativo de Lucro Bruto em Reais (Top 5 Produtos de Ontem):*\n\n`;
+    msg += `O produto que mais gerou **lucro bruto em dinheiro** foi:\n`;
+    msg += `🏆 **${campeaoNome}** — **${campeaoLucroStr}** de lucro bruto total (${campeao.quantidade} un. vendidas, Faturamento: R$ ${campeaoTotal.toFixed(2)}, Margem: ${campeaoMargemStr}).\n\n`;
+    msg += `*Ranking por Lucro Bruto Total:*\n`;
+    comLucro.forEach((prod, idx) => {
+      const pNome = prod.nome || prod.produto || "Item";
+      const pTotal = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      const pLucroStr = typeof prod.lucroBruto === "number" ? `R$ ${prod.lucroBruto.toFixed(2)}` : "R$ 0,00";
+      const pMargemStr = typeof prod.margem === "number" ? `${prod.margem.toFixed(1)}%` : "N/D";
+      msg += `${idx + 1}. **${pNome}:** ${pLucroStr} (Faturamento: R$ ${pTotal.toFixed(2)} | Margem: ${pMargemStr})\n`;
+    });
+    msg += `\n_Nota financeira: O lucro bruto considera Faturamento deduzido do CMV (Custo das Mercadorias Vendidas)._`;
+
+    return { handled: true, answer: msg, specialist: "vendas_pdv" };
+  }
+
+  // Caso 2C: "Quais produtos estão sem custo cadastrado?"
+  if (p.includes("sem custo cadastrado") || p.includes("sem custo")) {
+    const semCusto = (data.top5ProdutosOntem || []).filter((p) => p.statusCusto === "sem_custo" || p.custoUnitario === null || p.cmvTotal === null);
+    if (semCusto.length === 0) {
+      return {
+        handled: true,
+        answer: "✅ *Agente de Estoque e Vendas:*\n\nTodos os 5 produtos mais vendidos de ontem possuem custos cadastrados e auditados no sistema.",
+        specialist: "vendas_pdv",
+      };
+    }
+
+    let msg = `⚠️ *Produtos Vendidos sem Custo Cadastrado:*\n\n`;
+    semCusto.forEach((prod) => {
+      const pNome = prod.nome || prod.produto || "Item";
+      const pTotal = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      msg += `• **${pNome}** (Código: ${prod.codigo || "-"}) — ${prod.quantidade} un. vendidas ontem (Faturamento: R$ ${pTotal.toFixed(2)})\n`;
+    });
+    msg += `\n_Para habilitar o cálculo de margem e CMV desses itens, cadastre o custo unitário na aba de Rentabilidade ou via importação de NF/orçamento._`;
 
     return { handled: true, answer: msg, specialist: "vendas_pdv" };
   }
@@ -1419,10 +1598,12 @@ export async function fetchAndExecuteSalesPdvSpecialist(
 
   try {
     if (repository.listSalesPdvDetails) {
-      const [yesterdaySales, monthSales, prevMonthSales] = await Promise.all([
+      const [yesterdaySales, monthSales, prevMonthSales, inventoryItems, recipeCards] = await Promise.all([
         repository.listSalesPdvDetails(context, { start: yesterdayStr, end: yesterdayStr }),
         repository.listSalesPdvDetails(context, { start: startOfMonthStr, end: todayStr }),
         repository.listSalesPdvDetails(context, { start: startOfPrevMonthStr, end: endOfPrevMonthStr }),
+        repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
+        repository.listRecipeCards ? repository.listRecipeCards(context) : Promise.resolve([]),
       ]);
 
       const filterValid = (list: SalesPdvDetailRecord[]) => {
@@ -1454,31 +1635,118 @@ export async function fetchAndExecuteSalesPdvSpecialist(
       const validMonth = filterValid(monthSales);
       const validPrevMonth = filterValid(prevMonthSales);
 
+      // Mapeamento de custos reais do catálogo
+      const costMapByCode = new Map<string, number>();
+      const costMapByName = new Map<string, number>();
+
+      for (const item of inventoryItems) {
+        if (typeof item.currentCost === "number" && item.currentCost > 0) {
+          if (item.code) costMapByCode.set(String(item.code), item.currentCost);
+          if (item.description) costMapByName.set(item.description.toLowerCase().trim(), item.currentCost);
+        }
+      }
+
+      for (const rc of recipeCards) {
+        if (typeof rc.totalCost === "number" && rc.totalCost > 0 && rc.name) {
+          const k = rc.name.toLowerCase().trim();
+          if (!costMapByName.has(k)) {
+            costMapByName.set(k, rc.totalCost);
+          }
+        }
+      }
+
       // 1. Faturamento de ontem
       collectedData.vendasOntemTotal = validYesterday.reduce((acc, s) => acc + (s.amount || 0), 0);
       collectedData.pedidosOntemTotal = validYesterday.length;
 
-      // 2. Top 5 produtos de ontem
-      const productMap = new Map<string, { quantidade: number; total: number }>();
+      // 2. Top 5 produtos de ontem com custos e margens reais
+      const productMap = new Map<string, {
+        nome: string;
+        codigo: string;
+        quantidade: number;
+        total: number;
+        custoUnitario: number | null;
+      }>();
+
+      let itensOntemTotal = 0;
+      let receitaComCusto = 0;
+      let cmvTotalCalculavel = 0;
+      let lucroBrutoCalculavel = 0;
+      let produtosSemCustoQtd = 0;
+
       validYesterday.forEach((s) => {
         s.items.forEach((item) => {
           const name = item.productName.trim();
           if (!name) return;
-          const current = productMap.get(name) || { quantidade: 0, total: 0 };
+          const pId = item.productId ? String(item.productId).trim() : "";
+          const nameLower = name.toLowerCase();
+
+          let custo = pId ? costMapByCode.get(pId) : undefined;
+          if (custo === undefined) custo = costMapByName.get(nameLower);
+          if (custo === undefined) {
+            for (const [k, v] of costMapByName.entries()) {
+              if (nameLower.startsWith(k) || k.startsWith(nameLower)) {
+                custo = v;
+                break;
+              }
+            }
+          }
+
+          const current = productMap.get(name) || {
+            nome: name,
+            codigo: pId || "-",
+            quantidade: 0,
+            total: 0,
+            custoUnitario: custo ?? null,
+          };
           current.quantidade += item.quantity;
           current.total += item.total;
+          itensOntemTotal += item.quantity;
           productMap.set(name, current);
         });
       });
 
-      const sortedProducts = Array.from(productMap.entries())
-        .map(([nome, stats]) => ({
-          nome,
-          quantidade: stats.quantidade,
-          total: stats.total,
-        }))
+      const sortedProducts = Array.from(productMap.values())
+        .map((stats) => {
+          const faturamento = Math.round(stats.total * 100) / 100;
+          let cmvTotal: number | null = null;
+          let lucroBruto: number | null = null;
+          let margem: number | null = null;
+          let statusCusto = "sem_custo";
+
+          if (stats.custoUnitario !== null && stats.custoUnitario > 0) {
+            cmvTotal = Math.round(stats.custoUnitario * stats.quantidade * 100) / 100;
+            lucroBruto = Math.round((faturamento - cmvTotal) * 100) / 100;
+            margem = faturamento > 0 ? Math.round((lucroBruto / faturamento) * 1000) / 10 : 0;
+            statusCusto = "confirmado";
+            receitaComCusto += faturamento;
+            cmvTotalCalculavel += cmvTotal;
+            lucroBrutoCalculavel += lucroBruto;
+          } else {
+            produtosSemCustoQtd++;
+          }
+
+          return {
+            nome: stats.nome,
+            codigo: stats.codigo,
+            quantidade: stats.quantidade,
+            total: faturamento,
+            custoUnitario: stats.custoUnitario,
+            cmvTotal,
+            lucroBruto,
+            margem,
+            statusCusto,
+          };
+        })
         .sort((a, b) => b.quantidade - a.quantidade);
 
+      collectedData.itensOntemTotal = itensOntemTotal;
+      collectedData.lucroBrutoOntemCalculavel = Math.round(lucroBrutoCalculavel * 100) / 100;
+      collectedData.coberturaCustosOntemPercent = (collectedData.vendasOntemTotal && collectedData.vendasOntemTotal > 0)
+        ? Math.round((receitaComCusto / collectedData.vendasOntemTotal) * 1000) / 10
+        : 0;
+      collectedData.produtosSemCustoOntemQtd = produtosSemCustoQtd;
+      collectedData.yesterdayDateStr = yesterdayStr;
       collectedData.top5ProdutosOntem = sortedProducts.slice(0, 5);
 
       // 3. Horário de pico de ontem (fuso SP)

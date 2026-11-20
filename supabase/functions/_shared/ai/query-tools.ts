@@ -651,6 +651,229 @@ export function createQueryToolCatalog(
       );
     };
 
+    async function aggregateSalesAndProductCosts(
+      context: AiExecutionContext,
+      period: DatePeriod,
+    ) {
+      let salesDetails: SalesPdvDetailRecord[] = [];
+      let inventoryItems: InventoryItemRecord[] = [];
+      let recipeCards: RecipeCardRecord[] = [];
+
+      try {
+        const [sales, inv, recipes] = await Promise.all([
+          repository.listSalesPdvDetails ? repository.listSalesPdvDetails(context, period) : Promise.resolve([]),
+          repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
+          repository.listRecipeCards ? repository.listRecipeCards(context) : Promise.resolve([]),
+        ]);
+        salesDetails = sales;
+        inventoryItems = inv;
+        recipeCards = recipes;
+      } catch (err) {
+        console.warn("[query-tools] Falha ao consultar vendas detalhadas ou estoque:", err);
+      }
+
+      const costMapByCode = new Map<string, { custo: number; descricao: string; precoVenda: number; categoria: string }>();
+      const costMapByName = new Map<string, { custo: number; descricao: string; precoVenda: number; categoria: string }>();
+
+      for (const p of inventoryItems) {
+        const c = typeof p.currentCost === "number" ? p.currentCost : 0;
+        const pv = typeof p.salePrice === "number" ? p.salePrice : 0;
+        const desc = (p.description || "").trim();
+        const info = { custo: c, precoVenda: pv, descricao: desc, categoria: p.category || "Geral" };
+        if (p.code) costMapByCode.set(String(p.code), info);
+        if (desc) costMapByName.set(desc.toLowerCase(), info);
+      }
+
+      for (const rc of recipeCards) {
+        const c = typeof rc.totalCost === "number" ? rc.totalCost : 0;
+        const pv = typeof rc.salePrice === "number" ? rc.salePrice : 0;
+        const name = (rc.name || "").trim();
+        if (name) {
+          const nameKey = name.toLowerCase();
+          if (!costMapByName.has(nameKey) || (costMapByName.get(nameKey)?.custo ?? 0) <= 0) {
+            costMapByName.set(nameKey, { custo: c, precoVenda: pv, descricao: name, categoria: "Produção Própria" });
+          }
+        }
+      }
+
+      const validSales = salesDetails.filter((s) => {
+        const st = (s.status || "").toLowerCase();
+        return st !== "cancelada" && st !== "cancelled" && st !== "estornada";
+      });
+
+      const productAgg = new Map<string, {
+        codigo: string;
+        produto: string;
+        categoria: string;
+        quantidade: number;
+        faturamento: number;
+        custoUnitario: number | null;
+        isCombo: boolean;
+        dailyMap: Map<string, { quantidade: number; faturamento: number }>;
+      }>();
+
+      let faturamentoTotal = 0;
+      for (const s of validSales) {
+        faturamentoTotal += s.amount || 0;
+        const saleDate = s.date ? s.date.slice(0, 10) : "";
+
+        for (const it of s.items || []) {
+          const qtd = Number(it.quantity || 1);
+          if (qtd <= 0) continue;
+          const preco = Number(it.price || 0);
+          const totalItem = Number(it.total || qtd * preco);
+
+          const pId = it.productId ? String(it.productId).trim() : "";
+          const pName = String(it.productName || "Item sem nome").trim();
+          const pNameLower = pName.toLowerCase();
+
+          let matched = pId ? costMapByCode.get(pId) : undefined;
+          if (!matched) matched = costMapByName.get(pNameLower);
+
+          if (!matched) {
+            for (const [k, v] of costMapByName.entries()) {
+              if (pNameLower.startsWith(k) || k.startsWith(pNameLower)) {
+                matched = v;
+                break;
+              }
+            }
+          }
+
+          const custoUnit = matched && matched.custo > 0 ? matched.custo : null;
+          const key = pId || pNameLower;
+          const isCombo = pNameLower.includes("combo") || pNameLower.includes("+");
+
+          const cur = productAgg.get(key) || {
+            codigo: pId || "-",
+            produto: pName,
+            categoria: matched?.categoria || (isCombo ? "Combos" : "Geral"),
+            quantidade: 0,
+            faturamento: 0,
+            custoUnitario: custoUnit,
+            isCombo,
+            dailyMap: new Map<string, { quantidade: number; faturamento: number }>(),
+          };
+
+          cur.quantidade += qtd;
+          cur.faturamento += totalItem;
+
+          if (saleDate) {
+            const dayEntry = cur.dailyMap.get(saleDate) || { quantidade: 0, faturamento: 0 };
+            dayEntry.quantidade += qtd;
+            dayEntry.faturamento += totalItem;
+            cur.dailyMap.set(saleDate, dayEntry);
+          }
+
+          productAgg.set(key, cur);
+        }
+      }
+
+      const produtosFormatados: Array<{
+        codigo: string;
+        produto: string;
+        categoria: string;
+        quantidade: number;
+        faturamento: number;
+        precoMedio: number;
+        custoUnitario: number | null;
+        cmvTotal: number | null;
+        lucroBrutoTotal: number | null;
+        margemBrutaPercent: number | null;
+        statusCusto: "confirmado" | "referencia_atual" | "sem_custo";
+        isCombo: boolean;
+        evolucaoDiaria: Array<{ data: string; quantidade: number; faturamento: number }>;
+      }> = [];
+
+      let receitaComCusto = 0;
+      let cmvTotalCalculavel = 0;
+      let lucroBrutoCalculavel = 0;
+      let itensVendidosTotal = 0;
+      let produtosComCustoQtd = 0;
+      let produtosSemCustoQtd = 0;
+
+      for (const item of productAgg.values()) {
+        itensVendidosTotal += item.quantidade;
+        const faturamento = Math.round(item.faturamento * 100) / 100;
+        const precoMedio = item.quantidade > 0 ? Math.round((faturamento / item.quantidade) * 100) / 100 : 0;
+
+        let cmvTotal: number | null = null;
+        let lucroBrutoTotal: number | null = null;
+        let margemBrutaPercent: number | null = null;
+        let statusCusto: "confirmado" | "referencia_atual" | "sem_custo" = "sem_custo";
+
+        if (item.custoUnitario !== null && item.custoUnitario > 0) {
+          cmvTotal = Math.round(item.custoUnitario * item.quantidade * 100) / 100;
+          lucroBrutoTotal = Math.round((faturamento - cmvTotal) * 100) / 100;
+          margemBrutaPercent = faturamento > 0 ? Math.round((lucroBrutoTotal / faturamento) * 1000) / 10 : 0;
+          statusCusto = "confirmado";
+
+          receitaComCusto += faturamento;
+          cmvTotalCalculavel += cmvTotal;
+          lucroBrutoCalculavel += lucroBrutoTotal;
+          produtosComCustoQtd++;
+        } else {
+          produtosSemCustoQtd++;
+        }
+
+        const evolucaoDiaria = Array.from(item.dailyMap.entries())
+          .map(([data, d]) => ({
+            data,
+            quantidade: d.quantidade,
+            faturamento: Math.round(d.faturamento * 100) / 100,
+          }))
+          .sort((a, b) => a.data.localeCompare(b.data));
+
+        produtosFormatados.push({
+          codigo: item.codigo,
+          produto: item.produto,
+          categoria: item.categoria,
+          quantidade: item.quantidade,
+          faturamento,
+          precoMedio,
+          custoUnitario: item.custoUnitario,
+          cmvTotal,
+          lucroBrutoTotal,
+          margemBrutaPercent,
+          statusCusto,
+          isCombo: item.isCombo,
+          evolucaoDiaria,
+        });
+      }
+
+      receitaComCusto = Math.round(receitaComCusto * 100) / 100;
+      cmvTotalCalculavel = Math.round(cmvTotalCalculavel * 100) / 100;
+      lucroBrutoCalculavel = Math.round(lucroBrutoCalculavel * 100) / 100;
+      faturamentoTotal = Math.round(faturamentoTotal * 100) / 100;
+      const receitaSemCusto = Math.round((faturamentoTotal - receitaComCusto) * 100) / 100;
+
+      const margemBrutaMediaPonderada = receitaComCusto > 0
+        ? Math.round((lucroBrutoCalculavel / receitaComCusto) * 1000) / 10
+        : 0;
+
+      const coberturaCustoPercent = faturamentoTotal > 0
+        ? Math.round((receitaComCusto / faturamentoTotal) * 1000) / 10
+        : 0;
+
+      return {
+        periodo: period,
+        faturamentoTotal,
+        pedidosTotal: validSales.length,
+        itensVendidosTotal,
+        receitaComCusto,
+        receitaSemCusto,
+        cmvTotalCalculavel,
+        lucroBrutoCalculavel,
+        margemBrutaMediaPonderada,
+        coberturaCustoPercent,
+        produtosComCustoQtd,
+        produtosSemCustoQtd,
+        produtosTotalQtd: produtosFormatados.length,
+        produtos: produtosFormatados,
+        dataAtualizacao: new Date().toISOString(),
+        origem: "PDV Eyemobile (transações reais sincronizadas)",
+      };
+    }
+
     catalog.consultar_analise_comercial_vendas = async (args, context) => {
       const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
       const hojeStr = nowBrasil.toISOString().split("T")[0];
@@ -660,27 +883,42 @@ export function createQueryToolCatalog(
       const end = typeof args.data_fim === "string" ? args.data_fim : (typeof args.end === "string" ? args.end : hojeStr);
 
       const warnings: string[] = [];
-      let vendasTotais = 0;
-      let pedidosTotal = 0;
+      let analytics: Awaited<ReturnType<typeof aggregateSalesAndProductCosts>> | null = null;
       let queryError = false;
 
       try {
-        const sales = await repository.listSalesPDV(context, { start, end });
-        vendasTotais = sales.reduce((a, s) => a + s.amount, 0);
-        pedidosTotal = sales.length;
-
-        if (pedidosTotal === 0) {
-          const rev = await repository.listRevenues(context, { start, end });
-          vendasTotais = rev.reduce((a, r) => a + r.amount, 0);
-          pedidosTotal = rev.length;
-        }
+        analytics = await aggregateSalesAndProductCosts(context, { start, end });
       } catch (err) {
         console.warn("[query-tools] Falha ao consultar vendas comerciais:", err);
         queryError = true;
         warnings.push("Falha ao recuperar histórico comercial do PDV.");
       }
 
-      if (queryError) {
+      if (queryError || !analytics) {
+        try {
+          const salesPdv = await repository.listSalesPDV(context, { start, end });
+          if (salesPdv && salesPdv.length > 0) {
+            const vt = salesPdv.reduce((a, r) => a + (r.amount || 0), 0);
+            const pt = salesPdv.length;
+            const tm = pt > 0 ? Math.round((vt / pt) * 100) / 100 : null;
+            const data = {
+              workspaceId: context.workspaceId,
+              periodo: { start, end },
+              vendasTotais: vt,
+              pedidosTotal: pt,
+              ticketMedio: tm,
+              itensVendidosTotal: null,
+              distribuicaoCanais: [{ canal: "Salão / PDV Físico", faturamento: vt, percentual: 100, cor: "#3b82f6" }],
+              topProdutos: [],
+              status: "calculado",
+              dataAtualizacao: new Date().toISOString(),
+            };
+            return baseResult("consultar_analise_comercial_vendas", context, { start, end }, data, [], { ticketMedio: "vendasTotais / pedidosTotal" }, warnings);
+          }
+        } catch (_e) {
+          // segue para retorno de indisponibilidade
+        }
+
         const data = {
           workspaceId: context.workspaceId,
           periodo: { start, end },
@@ -698,12 +936,42 @@ export function createQueryToolCatalog(
         return baseResult("consultar_analise_comercial_vendas", context, { start, end }, data, [], {}, warnings);
       }
 
+      let vendasTotais = analytics.faturamentoTotal;
+      let pedidosTotal = analytics.pedidosTotal;
+
+      if (pedidosTotal === 0) {
+        try {
+          const salesPdv = await repository.listSalesPDV(context, { start, end });
+          if (salesPdv && salesPdv.length > 0) {
+            vendasTotais = salesPdv.reduce((a, r) => a + (r.amount || 0), 0);
+            pedidosTotal = salesPdv.length;
+          } else {
+            const rev = await repository.listRevenues(context, { start, end });
+            vendasTotais = rev.reduce((a, r) => a + (r.amount || 0), 0);
+            pedidosTotal = rev.length;
+          }
+        } catch (_e) {
+          // Mantém valores zerados do analytics
+        }
+      }
+
       const ticketMedio = pedidosTotal > 0 ? Math.round((vendasTotais / pedidosTotal) * 100) / 100 : null;
 
-      // Distribuição real de canais
       const distribuicaoCanais = vendasTotais > 0
         ? [{ canal: "Salão / PDV Físico", faturamento: vendasTotais, percentual: 100, cor: "#3b82f6" }]
         : [];
+
+      // Ordena produtos por quantidade vendida para topProdutos
+      const sortedProds = [...analytics.produtos].sort((a, b) => b.quantidade - a.quantidade);
+      const topProdutos = sortedProds.slice(0, 10).map((p) => ({
+        produto: p.produto,
+        codigo: p.codigo,
+        categoria: p.categoria,
+        quantidade: p.quantidade,
+        faturamento: p.faturamento,
+        precoMedio: p.precoMedio,
+        percentualFaturamento: vendasTotais > 0 ? Math.round((p.faturamento / vendasTotais) * 1000) / 10 : 0,
+      }));
 
       const data = {
         workspaceId: context.workspaceId,
@@ -711,12 +979,14 @@ export function createQueryToolCatalog(
         vendasTotais,
         pedidosTotal,
         ticketMedio,
-        itensVendidosTotal: null,
-        observacaoItens: "Detalhamento de produtos por SKU unitário requer sincronização com catálogo de itens do Eyemobile.",
+        itensVendidosTotal: analytics.itensVendidosTotal > 0 ? analytics.itensVendidosTotal : null,
+        observacaoItens: analytics.itensVendidosTotal > 0
+          ? "Detalhamento de produtos obtido das comandas registradas no PDV Eyemobile."
+          : "Nenhum item comanda detalhado para o período.",
         distribuicaoCanais,
-        topProdutos: [],
+        topProdutos,
         status: pedidosTotal > 0 ? "calculado" : "sem_registros_no_periodo",
-        dataAtualizacao: new Date().toISOString(),
+        dataAtualizacao: analytics.dataAtualizacao,
       };
 
       return baseResult(
@@ -728,6 +998,321 @@ export function createQueryToolCatalog(
         { ticketMedio: "vendasTotais / pedidosTotal" },
         warnings
       );
+    };
+
+    catalog.consultar_top_produtos_pdv = async (args, context) => {
+      const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+      const hojeStr = nowBrasil.toISOString().split("T")[0];
+      const ontemStr = new Date(nowBrasil.getTime() - 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+      let start = typeof args.data_inicio === "string" ? args.data_inicio : (typeof args.start === "string" ? args.start : ontemStr);
+      let end = typeof args.data_fim === "string" ? args.data_fim : (typeof args.end === "string" ? args.end : start);
+
+      const limite = typeof args.limite === "number" && args.limite > 0 ? args.limite : 5;
+      const ordenarPor = typeof args.ordenar_por === "string" ? args.ordenar_por : "quantidade";
+
+      const analytics = await aggregateSalesAndProductCosts(context, { start, end });
+
+      const sorted = [...analytics.produtos].sort((a, b) => {
+        if (ordenarPor === "lucro_bruto") {
+          return (b.lucroBrutoTotal ?? -999999) - (a.lucroBrutoTotal ?? -999999);
+        }
+        if (ordenarPor === "faturamento") {
+          return b.faturamento - a.faturamento;
+        }
+        if (ordenarPor === "margem") {
+          return (b.margemBrutaPercent ?? -999999) - (a.margemBrutaPercent ?? -999999);
+        }
+        return b.quantidade - a.quantidade;
+      });
+
+      const topProdutos = sorted.slice(0, limite).map((p, idx) => ({
+        posicao: idx + 1,
+        codigo: p.codigo,
+        produto: p.produto,
+        categoria: p.categoria,
+        quantidade: p.quantidade,
+        faturamento: p.faturamento,
+        precoMedio: p.precoMedio,
+        custoUnitario: p.custoUnitario,
+        cmvTotal: p.cmvTotal,
+        lucroBruto: p.lucroBrutoTotal,
+        margemBrutaPercent: p.margemBrutaPercent,
+        statusCusto: p.statusCusto,
+        avisoCusto: p.custoUnitario === null ? "Custo não confirmado — margem indisponível." : undefined,
+      }));
+
+      const data = {
+        workspaceId: context.workspaceId,
+        periodo: { start, end },
+        ordenacao: ordenarPor,
+        limite,
+        faturamentoTotal: analytics.faturamentoTotal,
+        totalPedidos: analytics.pedidosTotal,
+        totalItensVendidos: analytics.itensVendidosTotal,
+        receitaComCusto: analytics.receitaComCusto,
+        receitaSemCusto: analytics.receitaSemCusto,
+        cmvTotalCalculavel: analytics.cmvTotalCalculavel,
+        lucroBrutoCalculavel: analytics.lucroBrutoCalculavel,
+        margemBrutaMediaPonderada: analytics.margemBrutaMediaPonderada,
+        coberturaCustoPercent: analytics.coberturaCustoPercent,
+        produtosComCustoQtd: analytics.produtosComCustoQtd,
+        produtosSemCustoQtd: analytics.produtosSemCustoQtd,
+        produtosTotalQtd: analytics.produtosTotalQtd,
+        topProdutos,
+        origem: analytics.origem,
+        dataAtualizacao: analytics.dataAtualizacao,
+        status: analytics.pedidosTotal > 0 ? "calculado" : "sem_registros_no_periodo",
+      };
+
+      return baseResult("consultar_top_produtos_pdv", context, { start, end }, data, [], {
+        lucroBruto: "faturamento - cmvTotal",
+        margemBrutaPercent: "(lucroBruto / faturamento) * 100",
+      });
+    };
+
+    catalog.consultar_vendas_por_produto = async (args, context) => {
+      const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+      const hojeStr = nowBrasil.toISOString().split("T")[0];
+      const startPadrao = new Date(nowBrasil.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+      const start = typeof args.data_inicio === "string" ? args.data_inicio : (typeof args.start === "string" ? args.start : startPadrao);
+      const end = typeof args.data_fim === "string" ? args.data_fim : (typeof args.end === "string" ? args.end : hojeStr);
+      const busca = String(args.busca || args.produto || args.nome || "").toLowerCase().trim();
+
+      const analytics = await aggregateSalesAndProductCosts(context, { start, end });
+
+      const matches = analytics.produtos.filter((p) => {
+        if (!busca) return true;
+        return p.produto.toLowerCase().includes(busca) || p.codigo.toLowerCase() === busca;
+      });
+
+      const totalQuantidade = matches.reduce((acc, p) => acc + p.quantidade, 0);
+      const totalFaturamento = Math.round(matches.reduce((acc, p) => acc + p.faturamento, 0) * 100) / 100;
+      const totalCmv = matches.every((p) => p.cmvTotal !== null)
+        ? Math.round(matches.reduce((acc, p) => acc + (p.cmvTotal || 0), 0) * 100) / 100
+        : null;
+      const totalLucroBruto = totalCmv !== null ? Math.round((totalFaturamento - totalCmv) * 100) / 100 : null;
+      const margemMedia = (totalLucroBruto !== null && totalFaturamento > 0)
+        ? Math.round((totalLucroBruto / totalFaturamento) * 1000) / 10
+        : null;
+
+      const data = {
+        workspaceId: context.workspaceId,
+        termoBusca: busca,
+        periodo: { start, end },
+        totalItensEncontrados: matches.length,
+        totalQuantidadeVendida: totalQuantidade,
+        totalFaturamento,
+        totalCmv,
+        totalLucroBruto,
+        margemBrutaPercent: margemMedia,
+        itens: matches,
+        status: matches.length > 0 ? "encontrado" : "nao_encontrado",
+        dataAtualizacao: analytics.dataAtualizacao,
+        origem: analytics.origem,
+      };
+
+      return baseResult("consultar_vendas_por_produto", context, { start, end }, data);
+    };
+
+    catalog.consultar_margens_produtos = async (args, context) => {
+      const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+      const hojeStr = nowBrasil.toISOString().split("T")[0];
+      const startPadrao = new Date(nowBrasil.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+      const start = typeof args.data_inicio === "string" ? args.data_inicio : (typeof args.start === "string" ? args.start : startPadrao);
+      const end = typeof args.data_fim === "string" ? args.data_fim : (typeof args.end === "string" ? args.end : hojeStr);
+      const tipoRanking = typeof args.tipo_ranking === "string" ? args.tipo_ranking : "maiores_margens";
+      const limite = typeof args.limite === "number" && args.limite > 0 ? args.limite : 10;
+
+      const analytics = await aggregateSalesAndProductCosts(context, { start, end });
+
+      let selecionados = [...analytics.produtos];
+
+      if (tipoRanking === "maiores_margens") {
+        selecionados = selecionados
+          .filter((p) => p.margemBrutaPercent !== null)
+          .sort((a, b) => (b.margemBrutaPercent ?? 0) - (a.margemBrutaPercent ?? 0));
+      } else if (tipoRanking === "menores_margens") {
+        selecionados = selecionados
+          .filter((p) => p.margemBrutaPercent !== null)
+          .sort((a, b) => (a.margemBrutaPercent ?? 0) - (b.margemBrutaPercent ?? 0));
+      } else if (tipoRanking === "sem_custo") {
+        selecionados = selecionados
+          .filter((p) => p.custoUnitario === null)
+          .sort((a, b) => b.faturamento - a.faturamento);
+      } else if (tipoRanking === "criticos") {
+        selecionados = selecionados
+          .filter((p) => p.margemBrutaPercent !== null && p.margemBrutaPercent < 30)
+          .sort((a, b) => (a.margemBrutaPercent ?? 0) - (b.margemBrutaPercent ?? 0));
+      }
+
+      const itens = selecionados.slice(0, limite);
+
+      const data = {
+        workspaceId: context.workspaceId,
+        periodo: { start, end },
+        tipoRanking,
+        limite,
+        itens,
+        coberturaCustoPercent: analytics.coberturaCustoPercent,
+        margemBrutaMediaPonderada: analytics.margemBrutaMediaPonderada,
+        dataAtualizacao: analytics.dataAtualizacao,
+        origem: analytics.origem,
+      };
+
+      return baseResult("consultar_margens_produtos", context, { start, end }, data);
+    };
+
+    catalog.consultar_cmv_periodo = async (args, context) => {
+      const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+      const hojeStr = nowBrasil.toISOString().split("T")[0];
+      const startPadrao = new Date(nowBrasil.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+      const start = typeof args.data_inicio === "string" ? args.data_inicio : (typeof args.start === "string" ? args.start : startPadrao);
+      const end = typeof args.data_fim === "string" ? args.data_fim : (typeof args.end === "string" ? args.end : hojeStr);
+
+      const analytics = await aggregateSalesAndProductCosts(context, { start, end });
+
+      // Consulta compras de notas fiscais do período para segregação estrita
+      let comprasEstoquePeriodo = 0;
+      let qtdNotasCompra = 0;
+      if (repository.listFiscalNotes) {
+        try {
+          const nfs = await repository.listFiscalNotes(context, { start, end });
+          comprasEstoquePeriodo = nfs.reduce((acc, n) => acc + (n.valorTotal || 0), 0);
+          qtdNotasCompra = nfs.length;
+        } catch (_e) {
+          // Mantém 0 se não houver NF
+        }
+      }
+
+      const data = {
+        workspaceId: context.workspaceId,
+        periodo: { start, end },
+        faturamentoBrutoPdv: analytics.faturamentoTotal,
+        receitaComCustoConhecido: analytics.receitaComCusto,
+        receitaSemCustoConhecido: analytics.receitaSemCusto,
+        coberturaCustoPercent: analytics.coberturaCustoPercent,
+        cmvVendasOperacionais: analytics.cmvTotalCalculavel,
+        lucroBrutoConfirmado: analytics.lucroBrutoCalculavel,
+        margemBrutaConfirmadaPercent: analytics.margemBrutaMediaPonderada,
+        produtosComCustoQtd: analytics.produtosComCustoQtd,
+        produtosSemCustoQtd: analytics.produtosSemCustoQtd,
+        totalProdutosVendidosQtd: analytics.produtosTotalQtd,
+        segregacaoContabil: {
+          comprasEstoquePeriodo,
+          qtdNotasCompra,
+          cmvVendasPdv: analytics.cmvTotalCalculavel,
+          regraContabil: "Compras de insumos e mercadorias representam aquisição de estoque físico; o CMV representa exclusivamente o custo dos itens efetivamente vendidos no caixa. Segregação rigorosa para impedir dupla dedução de despesas operacionais.",
+        },
+        status: analytics.receitaComCusto > 0 ? "apurado_parcial_ou_total" : "dados_insuficientes",
+        dataAtualizacao: analytics.dataAtualizacao,
+        origem: analytics.origem,
+      };
+
+      return baseResult("consultar_cmv_periodo", context, { start, end }, data);
+    };
+
+    catalog.consultar_custos_fornecedores = async (args, context) => {
+      const fornecedorFiltro = String(args.fornecedor || "").toLowerCase().trim();
+      const produtoFiltro = String(args.produto || "").toLowerCase().trim();
+
+      let inventoryItems: InventoryItemRecord[] = [];
+      let fiscalNotes: FiscalNoteRecord[] = [];
+
+      try {
+        const [inv, nfs] = await Promise.all([
+          repository.listInventoryItems ? repository.listInventoryItems(context) : Promise.resolve([]),
+          repository.listFiscalNotes ? repository.listFiscalNotes(context) : Promise.resolve([]),
+        ]);
+        inventoryItems = inv;
+        fiscalNotes = nfs;
+      } catch (err) {
+        console.warn("[query-tools] Falha ao consultar fornecedores:", err);
+      }
+
+      const fornecedoresMap = new Map<string, {
+        fornecedor: string;
+        totalItens: number;
+        totalGastoNf: number;
+        produtos: Array<{ codigo: string; descricao: string; custoAtual: number | null; precoVenda: number }>;
+      }>();
+
+      for (const p of inventoryItems) {
+        const forn = (p.defaultSupplier || "Não especificado").trim();
+        if (fornecedorFiltro && !forn.toLowerCase().includes(fornecedorFiltro)) continue;
+        if (produtoFiltro && !p.description.toLowerCase().includes(produtoFiltro)) continue;
+
+        const cur = fornecedoresMap.get(forn) || {
+          fornecedor: forn,
+          totalItens: 0,
+          totalGastoNf: 0,
+          produtos: [],
+        };
+        cur.totalItens++;
+        cur.produtos.push({
+          codigo: p.code,
+          descricao: p.description,
+          custoAtual: p.currentCost,
+          precoVenda: p.salePrice,
+        });
+        fornecedoresMap.set(forn, cur);
+      }
+
+      for (const nf of fiscalNotes) {
+        const forn = (nf.fornecedor || "Não especificado").trim();
+        const cur = fornecedoresMap.get(forn);
+        if (cur) {
+          cur.totalGastoNf = Math.round((cur.totalGastoNf + nf.valorTotal) * 100) / 100;
+        }
+      }
+
+      const lista = Array.from(fornecedoresMap.values()).sort((a, b) => b.totalItens - a.totalItens);
+
+      const data = {
+        workspaceId: context.workspaceId,
+        fornecedoresQtd: lista.length,
+        fornecedores: lista,
+        dataAtualizacao: new Date().toISOString(),
+      };
+
+      return baseResult("consultar_custos_fornecedores", context, null, data);
+    };
+
+    catalog.consultar_rentabilidade_combos = async (args, context) => {
+      const nowBrasil = new Date(new Date().getTime() - 3 * 60 * 60 * 1000);
+      const hojeStr = nowBrasil.toISOString().split("T")[0];
+      const startPadrao = new Date(nowBrasil.getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split("T")[0];
+
+      const start = typeof args.data_inicio === "string" ? args.data_inicio : (typeof args.start === "string" ? args.start : startPadrao);
+      const end = typeof args.data_fim === "string" ? args.data_fim : (typeof args.end === "string" ? args.end : hojeStr);
+
+      const analytics = await aggregateSalesAndProductCosts(context, { start, end });
+
+      const combos = analytics.produtos.filter((p) => p.isCombo);
+      const faturamentoCombos = Math.round(combos.reduce((acc, c) => acc + c.faturamento, 0) * 100) / 100;
+      const quantidadeCombos = combos.reduce((acc, c) => acc + c.quantidade, 0);
+      const participacaoFaturamento = analytics.faturamentoTotal > 0
+        ? Math.round((faturamentoCombos / analytics.faturamentoTotal) * 1000) / 10
+        : 0;
+
+      const data = {
+        workspaceId: context.workspaceId,
+        periodo: { start, end },
+        combosIdentificadosQtd: combos.length,
+        quantidadeCombosVendidos: quantidadeCombos,
+        faturamentoCombos,
+        faturamentoTotalPdv: analytics.faturamentoTotal,
+        participacaoFaturamentoPercent: participacaoFaturamento,
+        combos,
+        observacao: "Combos e ofertas combinadas identificadas a partir dos itens das comandas.",
+        dataAtualizacao: analytics.dataAtualizacao,
+        origem: analytics.origem,
+      };
+
+      return baseResult("consultar_rentabilidade_combos", context, { start, end }, data);
     };
 
     catalog.consultar_analise_despesas_ceo = async (args, context) => {
@@ -1004,6 +1589,12 @@ export const FINANCIAL_TOOLS = new Set([
   "consultar_vendas_eyemobile",
   "validar_fechamento_caixa",
   "consultar_telemetria_ia",
+  "consultar_top_produtos_pdv",
+  "consultar_vendas_por_produto",
+  "consultar_margens_produtos",
+  "consultar_cmv_periodo",
+  "consultar_custos_fornecedores",
+  "consultar_rentabilidade_combos",
 ]);
 
 export async function executeQueryTool(

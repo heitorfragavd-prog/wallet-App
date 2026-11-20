@@ -53,6 +53,9 @@ export const SPECIALIST_AGENTS_REGISTRY: Record<SpecialistAgentId, SpecialistAge
       "consultar_resumo_mensal",
       "consultar_fluxo_caixa",
       "consultar_contas",
+      "consultar_top_produtos_pdv",
+      "consultar_margens_produtos",
+      "consultar_cmv_periodo",
     ],
     requiredRole: "admin", // Somente proprietário ou administradores podem acessar
     canMutateState: false, // Consultivo estrito — proibido executar pagamentos ou mutações
@@ -101,6 +104,11 @@ export const SPECIALIST_AGENTS_REGISTRY: Record<SpecialistAgentId, SpecialistAge
       "consultar_vendas_eyemobile",
       "buscar_receitas",
       "validar_fechamento_caixa",
+      "consultar_top_produtos_pdv",
+      "consultar_vendas_por_produto",
+      "consultar_margens_produtos",
+      "consultar_cmv_periodo",
+      "consultar_rentabilidade_combos",
     ],
     requiredRole: "member", // Pode ser consultado operacionalmente com dados restritos
     canMutateState: false,
@@ -108,7 +116,7 @@ export const SPECIALIST_AGENTS_REGISTRY: Record<SpecialistAgentId, SpecialistAge
     defaultModel: "gemini-2.5-flash",
     maxComplexity: 2,
     systemPromptSnippet:
-      "Você é o ESPECIALISTA DE VENDAS E PDV do Wallet CEO. Sua missão é diagnosticar o desempenho comercial, faturamento de balcão e delivery, ticket médio e mix de produtos mais lucrativos.",
+      "Você é o ESPECIALISTA DE VENDAS E PDV do Wallet CEO. Sua missão é diagnosticar o desempenho comercial, faturamento de balcão e delivery, ticket médio, produtos mais vendidos, custos e margem bruta real.",
   },
 
   estoque: {
@@ -123,7 +131,14 @@ export const SPECIALIST_AGENTS_REGISTRY: Record<SpecialistAgentId, SpecialistAge
       "Sugerir lista de compras priorizada por giro e validade",
       "Detectar desperdício e quebras de insumos na cozinha",
     ],
-    allowedTools: ["buscar_despesas", "consultar_resumo_mensal"],
+    allowedTools: [
+      "buscar_despesas",
+      "consultar_resumo_mensal",
+      "consultar_top_produtos_pdv",
+      "consultar_margens_produtos",
+      "consultar_cmv_periodo",
+      "consultar_custos_fornecedores",
+    ],
     requiredRole: "member",
     canMutateState: false,
     deterministicFirst: true,
@@ -169,6 +184,12 @@ export const SPECIALIST_AGENTS_REGISTRY: Record<SpecialistAgentId, SpecialistAge
       "buscar_vendas_pdv",
       "buscar_receitas",
       "consultar_resumo_mensal",
+      "consultar_top_produtos_pdv",
+      "consultar_vendas_por_produto",
+      "consultar_margens_produtos",
+      "consultar_cmv_periodo",
+      "consultar_custos_fornecedores",
+      "consultar_rentabilidade_combos",
     ],
     requiredRole: "owner", // Exclusivo da alta liderança
     canMutateState: false,
