@@ -3761,7 +3761,7 @@ serve(async (req) => {
           // Valida token de segurança cadastrado em compras_config
           const { data: cfg } = await supabase
             .from("compras_config")
-            .select("token_vinculacao_loja, workspace_id")
+            .select("token_vinculacao_loja, token_vinculacao_loja_expira_em, workspace_id")
             .limit(1)
             .maybeSingle();
 
@@ -3777,6 +3777,18 @@ serve(async (req) => {
             return new Response("OK", { status: 200, headers: corsHeaders });
           }
 
+          // Validação de expiração temporal da credencial (time-limited)
+          if (cfg?.token_vinculacao_loja_expira_em) {
+            const expiraEm = new Date(cfg.token_vinculacao_loja_expira_em).getTime();
+            if (Date.now() > expiraEm) {
+              await sendReply(
+                `⛔ <b>Acesso Negado: Token de vinculação expirado.</b>\n\n` +
+                `Esta credencial temporária expirou. Gere uma nova chave de ativação no Painel da Wallet.`
+              );
+              return new Response("OK", { status: 200, headers: corsHeaders });
+            }
+          }
+
           // Token válido: vincula o grupo de forma segura
           await supabase
             .from("telegram_grupos_config")
@@ -3787,10 +3799,16 @@ serve(async (req) => {
             })
             .eq("id", pendente.id);
 
+          // Revogação estrita após o primeiro uso (one-time use credential)
           if (cfg?.workspace_id) {
             await supabase
               .from("compras_config")
-              .update({ grupo_conversas_loja_chat_id: String(chatId) })
+              .update({
+                grupo_conversas_loja_chat_id: String(chatId),
+                token_vinculacao_loja: null,
+                token_vinculacao_loja_expira_em: null,
+                updated_at: new Date().toISOString()
+              })
               .eq("workspace_id", cfg.workspace_id);
           }
 
