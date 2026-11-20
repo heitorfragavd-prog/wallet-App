@@ -251,11 +251,7 @@ export function routeUserQueryToSpecialists(userPrompt: string): SpecialistRouti
   const isVendasQuery =
     p.includes("quanto vendemos ontem") ||
     p.includes("quanto vendi ontem") ||
-    p.includes("quanto faturei ontem") ||
-    p.includes("quanto faturamos ontem") ||
-    p.includes("faturamento de ontem") ||
     p.includes("vendas de ontem") ||
-    p.includes("faturamento ontem") ||
     p.includes("vendas ontem") ||
     p.includes("ticket médio") ||
     p.includes("ticket medio") ||
