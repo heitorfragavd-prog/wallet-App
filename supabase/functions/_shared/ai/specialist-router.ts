@@ -1343,21 +1343,32 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     table += `|---|---:|---:|---:|---:|---:|\n`;
 
     data.top5ProdutosOntem.slice(0, 5).forEach((prod) => {
-      const cmvStr = prod.cmvTotal !== null ? `R$ ${prod.cmvTotal.toFixed(2)}` : "Indisponível";
-      const lucroStr = prod.lucroBruto !== null ? `R$ ${prod.lucroBruto.toFixed(2)}` : "Indisponível";
-      const margemStr = prod.margem !== null ? `${prod.margem.toFixed(1)}%` : "Custo não confirmado";
-      table += `| ${prod.nome} | ${prod.quantidade} un. | R$ ${prod.total.toFixed(2)} | ${cmvStr} | ${lucroStr} | ${margemStr} |\n`;
+      const nome = prod.nome || prod.produto || "Produto";
+      const qtd = typeof prod.quantidade === "number" ? prod.quantidade : 0;
+      const totalNum = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      const cmvStr = typeof prod.cmvTotal === "number" ? `R$ ${prod.cmvTotal.toFixed(2)}` : "Indisponível";
+      const lucroStr = typeof prod.lucroBruto === "number" ? `R$ ${prod.lucroBruto.toFixed(2)}` : "Indisponível";
+      const margemStr = typeof prod.margem === "number" ? `${prod.margem.toFixed(1)}%` : "Custo não confirmado";
+      table += `| ${nome} | ${qtd} un. | R$ ${totalNum.toFixed(2)} | ${cmvStr} | ${lucroStr} | ${margemStr} |\n`;
     });
 
-    const faturamentoTotalStr = data.vendasOntemTotal !== null && data.vendasOntemTotal !== undefined
+    table += `\n*Detalhamento do ranking:*\n`;
+    data.top5ProdutosOntem.slice(0, 5).forEach((prod, idx) => {
+      const nome = prod.nome || prod.produto || "Produto";
+      const qtd = typeof prod.quantidade === "number" ? prod.quantidade : 0;
+      const totalNum = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      table += `${idx + 1}. *${nome}* — ${qtd} un. (Total: R$ ${totalNum.toFixed(2)})\n`;
+    });
+
+    const faturamentoTotalStr = typeof data.vendasOntemTotal === "number"
       ? `R$ ${data.vendasOntemTotal.toFixed(2)}`
       : "R$ 0,00";
     const pedCount = data.pedidosOntemTotal ?? 0;
-    const totalItens = data.itensOntemTotal ?? data.top5ProdutosOntem.reduce((a, b) => a + b.quantidade, 0);
-    const lucroBrutoStr = data.lucroBrutoOntemCalculavel !== null && data.lucroBrutoOntemCalculavel !== undefined
+    const totalItens = data.itensOntemTotal ?? data.top5ProdutosOntem.reduce((a, b) => a + (b.quantidade || 0), 0);
+    const lucroBrutoStr = typeof data.lucroBrutoOntemCalculavel === "number"
       ? `R$ ${data.lucroBrutoOntemCalculavel.toFixed(2)}`
       : "R$ 0,00";
-    const coberturaStr = data.coberturaCustosOntemPercent !== null && data.coberturaCustosOntemPercent !== undefined
+    const coberturaStr = typeof data.coberturaCustosOntemPercent === "number"
       ? `${data.coberturaCustosOntemPercent.toFixed(1)}%`
       : "0.0%";
 
@@ -1373,16 +1384,18 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     table += `• **Origem dos dados:** PDV Eyemobile (transações reais sincronizadas no workspace)\n\n`;
 
     const maisLucrativoEmReais = [...data.top5ProdutosOntem]
-      .filter((p) => p.lucroBruto !== null)
+      .filter((p) => typeof p.lucroBruto === "number")
       .sort((a, b) => (b.lucroBruto ?? 0) - (a.lucroBruto ?? 0))[0];
 
     const maiorMargemPct = [...data.top5ProdutosOntem]
-      .filter((p) => p.margem !== null)
+      .filter((p) => typeof p.margem === "number")
       .sort((a, b) => (b.margem ?? 0) - (a.margem ?? 0))[0];
 
     let rec = "Mantenha o monitoramento diário da curva ABC de produtos.";
-    if (maisLucrativoEmReais && maiorMargemPct) {
-      rec = `O produto que gerou **maior lucro bruto em reais** foi o **${maisLucrativoEmReais.nome}** (R$ ${maisLucrativoEmReais.lucroBruto?.toFixed(2)} de lucro bruto), enquanto o de **maior margem percentual** foi o **${maiorMargemPct.nome}** (${maiorMargemPct.margem?.toFixed(1)}%). Recomenda-se estimular a venda combinada (combos) entre o item de alto volume e o de alta margem para alavancar a rentabilidade global.`;
+    if (maisLucrativoEmReais && maiorMargemPct && typeof maisLucrativoEmReais.lucroBruto === "number" && typeof maiorMargemPct.margem === "number") {
+      const nomeLucro = maisLucrativoEmReais.nome || maisLucrativoEmReais.produto || "Item";
+      const nomeMargem = maiorMargemPct.nome || maiorMargemPct.produto || "Item";
+      rec = `O produto que gerou **maior lucro bruto em reais** foi o **${nomeLucro}** (R$ ${maisLucrativoEmReais.lucroBruto.toFixed(2)} de lucro bruto), enquanto o de **maior margem percentual** foi o **${nomeMargem}** (${maiorMargemPct.margem.toFixed(1)}%). Recomenda-se estimular a venda combinada (combos) entre o item de alto volume e o de alta margem para alavancar a rentabilidade global.`;
     }
 
     table += `💡 **Recomendação Executiva:** ${rec}`;
@@ -1406,7 +1419,7 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     }
 
     const comLucro = [...data.top5ProdutosOntem]
-      .filter((p) => p.lucroBruto !== null)
+      .filter((p) => typeof p.lucroBruto === "number")
       .sort((a, b) => (b.lucroBruto ?? 0) - (a.lucroBruto ?? 0));
 
     if (comLucro.length === 0) {
@@ -1418,12 +1431,21 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     }
 
     const campeao = comLucro[0];
+    const campeaoNome = campeao.nome || campeao.produto || "Item";
+    const campeaoTotal = typeof campeao.total === "number" ? campeao.total : (typeof campeao.faturamento === "number" ? campeao.faturamento : 0);
+    const campeaoMargemStr = typeof campeao.margem === "number" ? `${campeao.margem.toFixed(1)}%` : "N/D";
+    const campeaoLucroStr = typeof campeao.lucroBruto === "number" ? `R$ ${campeao.lucroBruto.toFixed(2)}` : "R$ 0,00";
+
     let msg = `💰 *Comparativo de Lucro Bruto em Reais (Top 5 Produtos de Ontem):*\n\n`;
     msg += `O produto que mais gerou **lucro bruto em dinheiro** foi:\n`;
-    msg += `🏆 **${campeao.nome}** — **R$ ${campeao.lucroBruto?.toFixed(2)}** de lucro bruto total (${campeao.quantidade} un. vendidas, Faturamento: R$ ${campeao.total.toFixed(2)}, Margem: ${campeao.margem?.toFixed(1)}%).\n\n`;
+    msg += `🏆 **${campeaoNome}** — **${campeaoLucroStr}** de lucro bruto total (${campeao.quantidade} un. vendidas, Faturamento: R$ ${campeaoTotal.toFixed(2)}, Margem: ${campeaoMargemStr}).\n\n`;
     msg += `*Ranking por Lucro Bruto Total:*\n`;
-    comLucro.forEach((p, idx) => {
-      msg += `${idx + 1}. **${p.nome}:** R$ ${p.lucroBruto?.toFixed(2)} (Faturamento: R$ ${p.total.toFixed(2)} | Margem: ${p.margem?.toFixed(1)}%)\n`;
+    comLucro.forEach((prod, idx) => {
+      const pNome = prod.nome || prod.produto || "Item";
+      const pTotal = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      const pLucroStr = typeof prod.lucroBruto === "number" ? `R$ ${prod.lucroBruto.toFixed(2)}` : "R$ 0,00";
+      const pMargemStr = typeof prod.margem === "number" ? `${prod.margem.toFixed(1)}%` : "N/D";
+      msg += `${idx + 1}. **${pNome}:** ${pLucroStr} (Faturamento: R$ ${pTotal.toFixed(2)} | Margem: ${pMargemStr})\n`;
     });
     msg += `\n_Nota financeira: O lucro bruto considera Faturamento deduzido do CMV (Custo das Mercadorias Vendidas)._`;
 
@@ -1432,7 +1454,7 @@ export function buildSalesPdvSpecialistDeterministicResponse(
 
   // Caso 2C: "Quais produtos estão sem custo cadastrado?"
   if (p.includes("sem custo cadastrado") || p.includes("sem custo")) {
-    const semCusto = (data.top5ProdutosOntem || []).filter((p) => p.statusCusto === "sem_custo" || p.custoUnitario === null);
+    const semCusto = (data.top5ProdutosOntem || []).filter((p) => p.statusCusto === "sem_custo" || p.custoUnitario === null || p.cmvTotal === null);
     if (semCusto.length === 0) {
       return {
         handled: true,
@@ -1442,8 +1464,10 @@ export function buildSalesPdvSpecialistDeterministicResponse(
     }
 
     let msg = `⚠️ *Produtos Vendidos sem Custo Cadastrado:*\n\n`;
-    semCusto.forEach((p) => {
-      msg += `• **${p.nome}** (Código: ${p.codigo}) — ${p.quantidade} un. vendidas ontem (Faturamento: R$ ${p.total.toFixed(2)})\n`;
+    semCusto.forEach((prod) => {
+      const pNome = prod.nome || prod.produto || "Item";
+      const pTotal = typeof prod.total === "number" ? prod.total : (typeof prod.faturamento === "number" ? prod.faturamento : 0);
+      msg += `• **${pNome}** (Código: ${prod.codigo || "-"}) — ${prod.quantidade} un. vendidas ontem (Faturamento: R$ ${pTotal.toFixed(2)})\n`;
     });
     msg += `\n_Para habilitar o cálculo de margem e CMV desses itens, cadastre o custo unitário na aba de Rentabilidade ou via importação de NF/orçamento._`;
 
